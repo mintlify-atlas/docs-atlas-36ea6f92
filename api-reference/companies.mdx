@@ -1,0 +1,287 @@
+---
+title: "Companies API — Create and Manage Business Entities"
+sidebarTitle: "Companies"
+description: "CRUD endpoints for Credith company records. A company groups multiple stores and is identified by a unique RTN (Registro Tributario Nacional) number."
+---
+
+The Companies API is the top level of Credith's organizational hierarchy. Every store location, staff member, and point-of-sale terminal is ultimately rooted in a company record. A company holds the legal identity of a business — its name, tax registration number (RTN), contact email, and physical address — and acts as the parent container for all stores created beneath it. All endpoints are protected: only users with the **Owner** role may read or modify company data.
+
+---
+
+## Endpoints overview
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/companies` | List companies (paginated, filterable) |
+| `GET` | `/api/companies/:id` | Get a single company by UUID |
+| `POST` | `/api/companies` | Create a new company |
+| `PUT` | `/api/companies/:id` | Update company fields |
+| `DELETE` | `/api/companies/:id` | Permanently delete a company |
+
+---
+
+## List companies
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of records to return per page.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip before starting the page — use together with `limit` for pagination.
+</ParamField>
+
+<ParamField query="filter" type="string">
+  Case-insensitive partial match on the company `name` field (`ILIKE %filter%`). Omit to return all companies.
+</ParamField>
+
+```http
+GET /api/companies?limit=10&offset=0&filter=servi
+```
+
+### Response `200`
+
+```json
+{
+  "total": 1,
+  "data": [
+    {
+      "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+      "name": "ServiCredit",
+      "rtn": "08011999123456",
+      "email": "contacto@servicredit.com",
+      "address": "San Pedro Sula, Cortés",
+      "createdAt": "2024-01-15T10:00:00.000Z",
+      "updatedAt": "2024-01-15T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## Get company by ID
+
+```http
+GET /api/companies/:id
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the company to retrieve.
+</ParamField>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Company object returned. |
+| `404` | No company found with the given ID. |
+
+```json
+{
+  "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+  "name": "ServiCredit",
+  "rtn": "08011999123456",
+  "email": "contacto@servicredit.com",
+  "address": "San Pedro Sula, Cortés",
+  "createdAt": "2024-01-15T10:00:00.000Z",
+  "updatedAt": "2024-01-15T10:00:00.000Z"
+}
+```
+
+---
+
+## Create a company
+
+```http
+POST /api/companies
+```
+
+<Note>
+  The `rtn` (Registro Tributario Nacional) must be unique across all companies. Submitting a duplicate RTN returns **400 Bad Request**. The RTN is also validated to be non-empty before any database lookup is performed.
+</Note>
+
+### Request body
+
+<ParamField body="name" type="string" required>
+  Legal trading name of the company. Cannot be blank or whitespace-only.
+</ParamField>
+
+<ParamField body="rtn" type="string" required>
+  Tax registration number (Registro Tributario Nacional). Maximum 25 characters. Must be unique across all companies.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Contact email address for the company. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="address" type="string">
+  Physical address or location description for the company's headquarters.
+</ParamField>
+
+### Example request
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://your-domain.com/api/companies \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "ServiCredit",
+    "rtn": "08011999123456",
+    "email": "contacto@servicredit.com",
+    "address": "San Pedro Sula, Cortés, Honduras"
+  }'
+```
+
+```json Body
+{
+  "name": "ServiCredit",
+  "rtn": "08011999123456",
+  "email": "contacto@servicredit.com",
+  "address": "San Pedro Sula, Cortés, Honduras"
+}
+```
+
+</CodeGroup>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `201` | Company created successfully. Returns the new company object. |
+| `400` | Validation failed — `name` or `rtn` missing/blank, or RTN already exists. |
+| `500` | Unexpected server error. |
+
+```json
+{
+  "message": "Empresa creada correctamente",
+  "company": {
+    "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+    "name": "ServiCredit",
+    "rtn": "08011999123456",
+    "email": "contacto@servicredit.com",
+    "address": "San Pedro Sula, Cortés, Honduras",
+    "createdAt": "2024-06-01T14:22:00.000Z",
+    "updatedAt": "2024-06-01T14:22:00.000Z"
+  }
+}
+```
+
+---
+
+## Update a company
+
+```http
+PUT /api/companies/:id
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the company to update.
+</ParamField>
+
+All body fields are optional — only the fields you include will be changed.
+
+<ParamField body="name" type="string">
+  New company name. Cannot be set to an empty or whitespace-only string.
+</ParamField>
+
+<ParamField body="rtn" type="string">
+  New RTN value. Must be unique if it differs from the company's current RTN.
+</ParamField>
+
+<ParamField body="email" type="string">
+  New contact email address.
+</ParamField>
+
+<ParamField body="address" type="string">
+  New headquarters address.
+</ParamField>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Company updated successfully. Returns the updated company object. |
+| `400` | Validation failed — blank name/RTN supplied, or new RTN already belongs to another company. |
+| `404` | No company found with the given ID. |
+| `500` | Unexpected server error. |
+
+```json
+{
+  "message": "Empresa actualizada correctamente",
+  "company": {
+    "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+    "name": "ServiCredit S.A.",
+    "rtn": "08011999123456",
+    "email": "nuevo@servicredit.com",
+    "address": "Tegucigalpa, Honduras",
+    "updatedAt": "2024-07-10T09:15:00.000Z"
+  }
+}
+```
+
+---
+
+## Delete a company
+
+```http
+DELETE /api/companies/:id
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the company to delete.
+</ParamField>
+
+<Warning>
+  This is a **hard delete** — the company record is permanently removed from the database. All associated stores and dependent records may be affected. Ensure there are no active stores under this company before deleting it.
+</Warning>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Company deleted successfully. |
+| `404` | No company found with the given ID. |
+| `500` | Unexpected server error. |
+
+```json
+{
+  "message": "Empresa eliminada correctamente"
+}
+```
+
+---
+
+## Company object reference
+
+<ResponseField name="companyId" type="string">
+  UUID v4 primary key, auto-generated on creation.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Legal trading name of the company. Maximum 100 characters.
+</ResponseField>
+
+<ResponseField name="rtn" type="string">
+  Registro Tributario Nacional — the company's government-issued tax ID. Maximum 25 characters. Unique across all records.
+</ResponseField>
+
+<ResponseField name="email" type="string | null">
+  Optional contact email address. Maximum 100 characters.
+</ResponseField>
+
+<ResponseField name="address" type="string | null">
+  Optional free-text headquarters address.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the record was created.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the most recent update.
+</ResponseField>
+
+<Tip>
+  Company records use **soft-delete** internally via a `deletedAt` column. While the `DELETE` endpoint hard-destroys the row with Sequelize's `destroy()`, the paranoid model means any record with a `deletedAt` timestamp is automatically excluded from all queries.
+</Tip>

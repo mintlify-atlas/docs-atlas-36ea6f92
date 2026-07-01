@@ -1,0 +1,189 @@
+---
+title: "Authenticate Users and Manage Sessions in Credith"
+sidebarTitle: "Authentication"
+description: "Credith uses JWT tokens stored in HTTP-only cookies. Register a user to receive a token, then include the cookie on subsequent authenticated requests."
+---
+
+Credith authenticates every user with a signed JSON Web Token (JWT) issued by the Express backend. On a successful login the server sets two cookies — an `httpOnly` `token` cookie that the browser automatically sends on every subsequent request, and a readable `session` cookie that the React frontend parses to display the user's name and role without making an extra API call. Passwords are hashed with bcrypt (10 salt rounds) before storage, and all token verification happens inside a dedicated middleware that short-circuits unauthorised requests before they reach any controller.
+
+## Registering a User
+
+`POST /api/users` creates a new user record in the `cd.users` table. All name fields are required, the password must be at least six characters, and the email must be unique. You must also supply a valid `storeId` (UUID) and a valid `checkoutMachineId` (UUID) — users are always created pre-assigned to both a store and a checkout machine.
+
+```bash
+curl -X POST http://localhost:3000/api/users \
+  -H "Content-Type: application/json" \
+  -d '{
+    "first_name": "María",
+    "second_name": "José",
+    "first_last_name": "Flores",
+    "second_last_name": "Reyes",
+    "email": "maria.flores@servicredit.hn",
+    "password": "segura123",
+    "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+    "checkoutMachineId": "c91234e5-1ae8-4597-b95e-9889028f0001",
+    "role": "EMPLOYEE"
+  }'
+```
+
+A successful response returns `201` with the new user object (password excluded). The `role` field accepts `"EMPLOYEE"` or `"ADMIN"` — any other value defaults to `"EMPLOYEE"`.
+
+<Note>
+  `POST /api/users` does **not** issue a cookie or log the user in — it only creates the account. To obtain a session the user must call `POST /api/users/login` separately.
+</Note>
+
+## Logging In
+
+`POST /api/users/login` validates credentials, generates a JWT, and sets both cookies in the response. The token payload contains `{ id, email, role, storeId }` and expires after the number of hours configured in `COOKIE_LIFETIME_HOURS` (defaults to `2`).
+
+```bash
+curl -X POST http://localhost:3000/api/users/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{
+    "email": "maria.flores@servicredit.hn",
+    "password": "segura123"
+  }'
+```
+
+A `200` response sets two `Set-Cookie` headers:
+
+| Cookie | `httpOnly` | Purpose |
+|--------|-----------|---------|
+| `token` | `true` | JWT used by the server middleware for auth checks |
+| `session` | `false` | JSON blob read by the frontend for UI display |
+
+The `session` cookie contains:
+
+```json
+{
+  "userId": "...",
+  "first_name": "María",
+  "second_name": "José",
+  "first_last_name": "Flores",
+  "second_last_name": "Reyes",
+  "email": "maria.flores@servicredit.hn",
+  "role": "EMPLOYEE",
+  "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+  "storeAddress": 1,
+  "checkoutMachine": {
+    "checkoutMachineId": "c91234e5-1ae8-4597-b95e-9889028f0001",
+    "name": "Caja 1",
+    "machineNumber": 1
+  }
+}
+```
+
+## How Cookies Are Read on the Frontend
+
+The React app uses a `getSession()` helper that parses `document.cookie` to extract the `session` cookie without any additional network request:
+
+```javascript
+// Website/src/helpers/session.js
+export function getSession() {
+  const cookie = document.cookie
+    .split("; ")
+    .find(row => row.startsWith("session="))
+  if (!cookie) return null
+  try {
+    return JSON.parse(decodeURIComponent(cookie.split("=")[1]))
+  } catch {
+    return null
+  }
+}
+
+export function getUserRole() {
+  const session = getSession()
+  if (!session) return ROLE.EMPLOYEE
+  return session.role || ROLE.EMPLOYEE
+}
+```
+
+All `fetch` calls from the frontend include `credentials: 'include'` so the `httpOnly` `token` cookie is automatically attached:
+
+```javascript
+// Website/src/helpers/fetcher.js
+const res = await fetch(`${baseRoute}${cleanPath}`, {
+  method,
+  headers: { "Content-Type": "application/json" },
+  credentials: 'include', // sends & receives cookies automatically
+  body: body !== null && typeof body === 'object' ? JSON.stringify(body) : body,
+})
+```
+
+## The Auth Middleware
+
+`authMiddleware` is applied selectively — only the three routes listed below require a valid token. The middleware reads `req.cookies.token`, verifies the signature with `verifyToken` (which calls `jwt.verify` against `process.env.JWT_SECRET`), and attaches the decoded payload to `req.user`.
+
+```javascript
+// Service/middlewares/authMiddleware.js
+const authMiddleware = (req, res, next) => {
+  try {
+    const token = req.cookies?.token
+    if (!token) {
+      return res.status(401).json({ message: "Token requerido" })
+    }
+    const decoded = verifyToken(token)
+    req.user = decoded  // { id, email, role, storeId, iat, exp }
+    next()
+  } catch (error) {
+    return res.status(401).json({ message: "Token invalido" })
+  }
+}
+```
+
+## Protected Routes
+
+Only three endpoints in the Credith API require authentication:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PUT` | `/api/users/desactivate/:id` | Soft-deactivate a user (`isActive = false`) |
+| `PUT` | `/api/users/activate/:id` | Re-activate a user (`isActive = true`) |
+| `PUT` | `/api/users/update-password` | Update the authenticated user's password |
+
+## Updating a Password
+
+`PUT /api/users/update-password` reads the authenticated user's `id` from `req.user` (set by the middleware) — you do not need to pass the user ID in the body. The new password must be at least six characters.
+
+```bash
+curl -X PUT http://localhost:3000/api/users/update-password \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "currentPassword": "segura123",
+    "newPassword": "nuevaPassword456"
+  }'
+```
+
+A `200` response confirms the update:
+
+```json
+{ "message": "Contraseña actualizada correctamente" }
+```
+
+Common error responses:
+
+| Status | Message |
+|--------|---------|
+| `400` | `"La nueva contraseña debe tener al menos 6 caracteres"` |
+| `400` | `"La contraseña actual es incorrecta"` |
+| `401` | `"Token requerido"` / `"Token invalido"` |
+| `404` | `"Usuario no encontrado"` |
+
+## Logging Out
+
+`POST /api/users/logout` clears both cookies server-side:
+
+```bash
+curl -X POST http://localhost:3000/api/users/logout \
+  -b cookies.txt
+```
+
+```json
+{ "message": "Sesión cerrada" }
+```
+
+<Note>
+  Credith uses **cookie-based auth** rather than an `Authorization: Bearer` header. The `httpOnly` flag on the `token` cookie means JavaScript on the client cannot read or tamper with it, which prevents XSS token theft. If you are testing with tools like Postman, enable the **Cookie Jar** feature (or use `-c`/`-b` with curl) so the `token` cookie is stored and replayed automatically.
+</Note>

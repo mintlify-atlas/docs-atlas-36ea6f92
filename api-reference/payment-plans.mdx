@@ -1,0 +1,385 @@
+---
+title: "Payment Plans API — Manage Installment Credit Plans"
+sidebarTitle: "Payment Plans"
+description: "Retrieve, pay, and recalculate installment payment plans. Track pending and overdue payments across all clients with a single endpoint."
+---
+
+Payment plans in Credith represent the credit agreement attached to an `INSTALLMENT` bill. When an installment bill is created, a `BillPaymentPlan` record is automatically generated along with one `MonthlyPayment` record per installment period. The plan tracks `totalToPay`, `payedAmount`, and `status` (`PENDING`, `OVERDUE`, or `PAYED`). These endpoints let store operators view upcoming obligations, record payments distributed across monthly installments, and recalculate the remaining payment schedule when a client wishes to accelerate repayment.
+
+All four endpoints require authentication via a valid JWT (`Authorization: Bearer <token>`). The `pending-payments` endpoint additionally requires the `ADMIN` or `OWNER` role.
+
+---
+
+## `GET /api/payment-plan/pending-payments`
+
+Returns all monthly installments that are `PENDING` or `OVERDUE` and have a `paymentDeadline` before the start of the month that is 3 months ahead of today. Results include the associated client's name, DNI, and phone number, ordered by client name then deadline ascending.
+
+<Tip>
+  This endpoint powers the collections dashboard. ADMIN-role users only see payments for bills issued by their own store; OWNER-role users see all payments company-wide.
+</Tip>
+
+**No query parameters required.**
+
+**Example**
+
+<CodeGroup>
+```bash cURL
+curl -X GET https://your-domain.com/api/payment-plan/pending-payments \
+  -H "Authorization: Bearer <token>"
+```
+
+```json Response 200
+{
+  "period": {
+    "type": "upToMonthsAhead",
+    "year": 2025,
+    "month": 6,
+    "endDate": "2025-09-01",
+    "monthsAhead": 3
+  },
+  "pendingPayments": [
+    {
+      "monthlyPaymentId": "aab11122-5717-4562-b3fc-2c963f66afa6",
+      "billPaymentPlanId": "dd556677-5717-4562-b3fc-2c963f66afa6",
+      "paymentDeadline": "2025-07-15T00:00:00.000Z",
+      "paymentAmount": 166.67,
+      "interestToPay": 0,
+      "payedAmount": 0,
+      "amountToPay": 166.67,
+      "totalToPay": 1380.00,
+      "planPayedAmount": 380.00,
+      "planStatus": "PENDING",
+      "client": {
+        "clientId": "f22222e5-9ae8-4597-b95e-9889028f5555",
+        "name": "Juan Pérez",
+        "dni": "0801-1990-12345",
+        "phone": "9999-8888"
+      }
+    }
+  ]
+}
+```
+</CodeGroup>
+
+**Response fields**
+
+<ResponseField name="period" type="object">
+  Describes the time window covered by this response.
+
+  <Expandable title="period fields">
+    <ResponseField name="period.type" type="string">
+      Always `"upToMonthsAhead"` for this endpoint.
+    </ResponseField>
+    <ResponseField name="period.year" type="integer">
+      Current calendar year.
+    </ResponseField>
+    <ResponseField name="period.month" type="integer">
+      Current calendar month (1–12).
+    </ResponseField>
+    <ResponseField name="period.endDate" type="string (date)">
+      Exclusive upper bound used in the SQL filter (`payment_deadline < endDate`).
+    </ResponseField>
+    <ResponseField name="period.monthsAhead" type="integer">
+      Number of months ahead included in the window (currently `3`).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="pendingPayments" type="array">
+  List of pending monthly installment records.
+
+  <Expandable title="pendingPayments item fields">
+    <ResponseField name="monthlyPaymentId" type="string (UUID)">
+      Primary key of the monthly payment record.
+    </ResponseField>
+    <ResponseField name="billPaymentPlanId" type="string (UUID)">
+      Parent payment plan UUID.
+    </ResponseField>
+    <ResponseField name="paymentDeadline" type="string (date-time)">
+      Date by which this installment should be paid.
+    </ResponseField>
+    <ResponseField name="paymentAmount" type="number">
+      Base installment amount for this month (excluding interest).
+    </ResponseField>
+    <ResponseField name="interestToPay" type="number">
+      Any accrued interest added to this installment.
+    </ResponseField>
+    <ResponseField name="payedAmount" type="number">
+      Amount already paid toward this specific monthly installment.
+    </ResponseField>
+    <ResponseField name="amountToPay" type="number">
+      Remaining balance for this installment: `paymentAmount + interestToPay - payedAmount`.
+    </ResponseField>
+    <ResponseField name="totalToPay" type="number">
+      Total outstanding balance of the parent plan.
+    </ResponseField>
+    <ResponseField name="planPayedAmount" type="number">
+      Total amount paid against the parent plan so far.
+    </ResponseField>
+    <ResponseField name="planStatus" type="string">
+      Status of the parent plan: `"PENDING"` or `"OVERDUE"`.
+    </ResponseField>
+    <ResponseField name="client" type="object">
+      Basic client information.
+      <Expandable title="client fields">
+        <ResponseField name="client.clientId" type="string (UUID)">UUID of the client.</ResponseField>
+        <ResponseField name="client.name" type="string">Full name of the client.</ResponseField>
+        <ResponseField name="client.dni" type="string">National identity document number.</ResponseField>
+        <ResponseField name="client.phone" type="string">Client phone number.</ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## `GET /api/payment-plan/:dni`
+
+Returns the most recent active payment plan for a client identified by their national ID (`dni`). Includes all monthly payment records. ADMIN-role users are automatically scoped to bills from their own store.
+
+**Path parameter**
+
+<ParamField path="dni" type="string" required>
+  The client's national identity number (DNI). Must be non-empty. Example: `"0801-1990-12345"`.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "paymentPlan": {
+    "billPaymentPlanId": "dd556677-5717-4562-b3fc-2c963f66afa6",
+    "totalToPay": 1380.00,
+    "initialPayment": 380.00,
+    "payedAmount": 546.67,
+    "startingDate": "2025-02-01T00:00:00.000Z",
+    "monthsToPay": 6,
+    "paymentDay": 15,
+    "interestRate": 0,
+    "status": "PENDING",
+    "lastPaymentTime": "2025-03-15T14:23:00.000Z",
+    "client": {
+      "clientId": "f22222e5-9ae8-4597-b95e-9889028f5555",
+      "name": "Juan Pérez",
+      "dni": "0801-1990-12345"
+    },
+    "monthlyPayments": [
+      {
+        "monthlyPaymentId": "aab11122-5717-4562-b3fc-2c963f66afa6",
+        "paymentAmount": 166.67,
+        "interestToPay": 0,
+        "paymentDeadline": "2025-02-15T00:00:00.000Z",
+        "payedAmount": 166.67,
+        "isPayed": true
+      }
+    ]
+  }
+}
+```
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | `dni` path parameter is empty |
+| `404` | No active payment plan found for the given DNI |
+
+---
+
+## `POST /api/payment-plan/:planId/pay`
+
+Credits a payment amount against a plan, distributing funds across monthly installments **starting from a specific month index** and working forward in deadline order. A month is marked `isPayed = true` when `payedAmount ≥ paymentAmount + interestToPay`. The plan's `payedAmount` is re-computed as the sum of all monthly `payedAmount` values plus the initial payment. The plan is set to `PAYED` if all installments are covered or if `totalToPay ≤ healedPayedAmount`.
+
+**Path parameter**
+
+<ParamField path="planId" type="string (UUID)" required>
+  UUID of the `BillPaymentPlan` to apply the payment to.
+</ParamField>
+
+**Request body**
+
+<ParamField body="amount" type="number" required>
+  The monetary amount to credit. Distributed sequentially across open installments from `month` onward until exhausted.
+</ParamField>
+
+<ParamField body="month" type="integer" required>
+  Zero-based index of the monthly payment array from which to start applying the payment. A value of `0` starts from the first installment; a value of `1` skips the first and starts from the second.
+</ParamField>
+
+**Example**
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/payment-plan/dd556677-5717-4562-b3fc-2c963f66afa6/pay \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "amount": 500.00,
+    "month": 1
+  }'
+```
+
+```json Response 200
+{
+  "message": "El pago se ha realizado con exito!",
+  "payedAmount": 1046.67
+}
+```
+</CodeGroup>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | Plan is already `PAYED`, or `month` exceeds the plan's `monthsToPay` |
+| `404` | Plan not found |
+
+---
+
+## `POST /api/payment-plan/:planId/recalculate`
+
+Destroys all existing monthly payment records for a plan and recreates them with a new installment count. The remaining balance (`totalToPay - payedAmount`) is evenly distributed across the new months, with any rounding adjustment applied to the final installment. The new schedule starts from the current calendar month.
+
+<Warning>
+  Recalculation is **blocked** if the plan has already been fully paid (`status = "PAYED"`) or if any open monthly installment has a non-zero `interestToPay` still outstanding. Additionally, `newMonths` cannot be greater than the current `monthsToPay` — this operation can only shorten, not extend, a payment schedule.
+</Warning>
+
+**Path parameter**
+
+<ParamField path="planId" type="string (UUID)" required>
+  UUID of the `BillPaymentPlan` to recalculate.
+</ParamField>
+
+**Request body**
+
+<ParamField body="newMonths" type="integer" required>
+  The new total number of monthly installments. Must be greater than zero and must not exceed the plan's current `monthsToPay`.
+</ParamField>
+
+**Example**
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/payment-plan/dd556677-5717-4562-b3fc-2c963f66afa6/recalculate \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "newMonths": 3
+  }'
+```
+
+```json Response 200
+{
+  "billPaymentPlanId": "dd556677-5717-4562-b3fc-2c963f66afa6",
+  "totalToPay": 1380.00,
+  "initialPayment": 380.00,
+  "payedAmount": 546.67,
+  "monthsToPay": 3,
+  "paymentDay": 15,
+  "interestRate": 0,
+  "status": "PENDING",
+  "monthlyPayments": [
+    {
+      "monthlyPaymentId": "new-uuid-1",
+      "paymentAmount": 277.78,
+      "interestToPay": 0,
+      "paymentDeadline": "2025-06-15T00:00:00.000Z",
+      "payedAmount": 0,
+      "isPayed": false
+    },
+    {
+      "monthlyPaymentId": "new-uuid-2",
+      "paymentAmount": 277.78,
+      "interestToPay": 0,
+      "paymentDeadline": "2025-07-15T00:00:00.000Z",
+      "payedAmount": 0,
+      "isPayed": false
+    },
+    {
+      "monthlyPaymentId": "new-uuid-3",
+      "paymentAmount": 277.77,
+      "interestToPay": 0,
+      "paymentDeadline": "2025-08-15T00:00:00.000Z",
+      "payedAmount": 0,
+      "isPayed": false
+    }
+  ]
+}
+```
+</CodeGroup>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | Plan is `PAYED`, `newMonths ≤ 0`, `newMonths > monthsToPay`, or open installments with pending interest exist |
+| `404` | Plan not found |
+
+---
+
+## Payment Plan data model
+
+<ResponseField name="billPaymentPlanId" type="string (UUID)">
+  Primary key of the payment plan.
+</ResponseField>
+
+<ResponseField name="totalToPay" type="number">
+  The full invoice total that must eventually be paid under this plan.
+</ResponseField>
+
+<ResponseField name="initialPayment" type="number">
+  Down-payment made at the time the installment bill was created.
+</ResponseField>
+
+<ResponseField name="payedAmount" type="number">
+  Running total of all payments received (initial payment + sum of monthly `payedAmount`).
+</ResponseField>
+
+<ResponseField name="startingDate" type="string (date-time)">
+  The date from which installment deadlines are calculated.
+</ResponseField>
+
+<ResponseField name="monthsToPay" type="integer">
+  Current number of installment periods remaining on the plan.
+</ResponseField>
+
+<ResponseField name="paymentDay" type="integer">
+  Day of the month (1–31) each installment falls due. Dates are normalized to the last day of the month if the month is shorter.
+</ResponseField>
+
+<ResponseField name="interestRate" type="integer">
+  Annual interest rate as a percentage (stored as SMALLINT). Default is `0`.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current plan status. One of `"PENDING"`, `"OVERDUE"`, or `"PAYED"`.
+</ResponseField>
+
+<ResponseField name="lastPaymentTime" type="string (date-time) | null">
+  Timestamp of the last payment event, if any.
+</ResponseField>
+
+<ResponseField name="monthlyPayments" type="array">
+  Ordered list of individual monthly installment records for this plan.
+
+  <Expandable title="monthlyPayment fields">
+    <ResponseField name="monthlyPaymentId" type="string (UUID)">
+      Primary key.
+    </ResponseField>
+    <ResponseField name="paymentAmount" type="number">
+      Scheduled installment amount for this month.
+    </ResponseField>
+    <ResponseField name="interestToPay" type="number">
+      Accrued interest added to this installment (default `0`).
+    </ResponseField>
+    <ResponseField name="paymentDeadline" type="string (date-time)">
+      Due date for this installment.
+    </ResponseField>
+    <ResponseField name="payedAmount" type="number">
+      Amount already credited toward this installment.
+    </ResponseField>
+    <ResponseField name="isPayed" type="boolean">
+      `true` once `payedAmount ≥ paymentAmount + interestToPay`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>

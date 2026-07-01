@@ -1,0 +1,379 @@
+---
+title: "CAI and CAI Ranges API — Fiscal Invoice Authorization"
+sidebarTitle: "CAI"
+description: "Manage CAI (Código de Autorización de Impresión) records and their bill number ranges. Only one CAI can be active at a time in Credith."
+---
+
+A **CAI** (Código de Autorización de Impresión) is a government-issued authorization code required for printing tax-compliant invoices in Honduras. In Credith, every store must have exactly one active CAI and one active CAI Range at any given time. When a new CAI is created, all previously active CAIs for that store are automatically deactivated. Each CAI owns one or more **CAI Ranges**, which define the numeric window (`minRange`–`maxRange`) from which sequential bill numbers are drawn. The system tracks `currentNumber` within the active range so that every invoice receives a unique, SAR-compliant bill number.
+
+---
+
+## CAI Endpoints
+
+Base path: `/api/cais`
+
+### `GET /api/cais`
+
+Returns a paginated list of CAIs. By default, only the most recent CAI per store is returned. Pass `?history=true` to retrieve the full historical list across all stores.
+
+**Query parameters**
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of records to return. Defaults to `10`.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip for pagination.
+</ParamField>
+
+<ParamField query="history" type="boolean" default="false">
+  When `true`, returns all historical CAIs. When `false` (default), returns only the latest CAI per store via a `DISTINCT ON (store_id)` query.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "total": 2,
+  "data": [
+    {
+      "caiId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "governmentId": "A1B2C3-D4E5F6-G7H8I9-J0K1L2-M3N4O5-06",
+      "expirationDate": "2027-06-30T00:00:00.000Z",
+      "documentType": "01",
+      "isActive": true,
+      "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+      "caiRanges": [ { "caiRangeId": "...", "minRange": 1, "maxRange": 50000, "currentNumber": 142, "isActive": true } ],
+      "store": { "storeId": "...", "storeNumber": 1, "address": "101", "company": { "name": "Credith HN" } }
+    }
+  ]
+}
+```
+
+---
+
+### `POST /api/cais`
+
+Creates a new CAI together with its initial bill number range. Inside a single database transaction the server:
+1. Deactivates all currently active CAIs for the same store.
+2. Creates the new CAI record.
+3. Creates the initial `CaiRange` child record with `currentNumber = 0`.
+
+<Warning>
+  Creating a new CAI deactivates **all** previously active CAIs belonging to the same store. Any in-flight bill creation that reads the old active CAI will receive a 404 after this point. If you intend to renew an existing CAI rather than conflict with the active-CAI guard, set `isRenewal: true`.
+</Warning>
+
+**Request body**
+
+<ParamField body="governmentId" type="string" required>
+  The official CAI code issued by SAR, e.g. `"A1B2C3-D4E5F6-G7H8I9-J0K1L2-M3N4O5-06"`. Must be unique across all CAIs.
+</ParamField>
+
+<ParamField body="storeId" type="string (UUID)" required>
+  UUID of the store this CAI belongs to. The store must exist.
+</ParamField>
+
+<ParamField body="expirationDate" type="string (date)" required>
+  ISO 8601 date string for when the CAI authorization expires, e.g. `"2027-06-30"`. Must be a future date.
+</ParamField>
+
+<ParamField body="range" type="object" required>
+  The initial bill number range to create alongside this CAI.
+
+  <Expandable title="range fields">
+    <ParamField body="range.minRange" type="integer" required>
+      The first bill number in the range. Must be greater than the highest `maxRange` ever registered for this store across all CAIs (prevents overlap).
+    </ParamField>
+
+    <ParamField body="range.maxRange" type="integer" required>
+      The last bill number in the range. Must be ≥ `minRange`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="documentType" type="string" default="01">
+  SAR document-type code. Defaults to `"01"` (standard invoice). This value is embedded in the formatted bill number.
+</ParamField>
+
+<ParamField body="isRenewal" type="boolean" default="false">
+  When `true`, skips the check that blocks creating a new CAI while one is already active. Use this when renewing an expiring CAI without an operational gap.
+</ParamField>
+
+**Example — create a CAI**
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/cais \
+  -H "Content-Type: application/json" \
+  -d '{
+    "governmentId": "A1B2C3-D4E5F6-G7H8I9-J0K1L2-M3N4O5-06",
+    "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+    "expirationDate": "2027-06-30",
+    "range": {
+      "minRange": 1,
+      "maxRange": 50000
+    },
+    "documentType": "01",
+    "isRenewal": false
+  }'
+```
+
+```json Response 201
+{
+  "message": "CAI creado correctamente",
+  "cai": {
+    "caiId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "governmentId": "A1B2C3-D4E5F6-G7H8I9-J0K1L2-M3N4O5-06",
+    "expirationDate": "2027-06-30T00:00:00.000Z",
+    "documentType": "01",
+    "isActive": true,
+    "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+    "caiRanges": [
+      {
+        "caiRangeId": "c1d2e3f4-0000-4562-b3fc-2c963f66afa6",
+        "minRange": 1,
+        "maxRange": 50000,
+        "currentNumber": 0,
+        "isActive": true
+      }
+    ]
+  }
+}
+```
+</CodeGroup>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | Missing/invalid fields, negative ranges, `minRange > maxRange`, duplicate `governmentId`, or `minRange` does not exceed the store's highest recorded `maxRange` |
+| `404` | Store not found |
+| `409` | Store already has an active CAI and `isRenewal` was not sent as `true` |
+
+---
+
+### `DELETE /api/cais/:id`
+
+Hard-deletes a CAI and all of its associated CAI Ranges inside a single transaction. The operation is blocked if **any** range belonging to this CAI has at least one invoice already issued against it.
+
+**Path parameter**
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the CAI to delete.
+</ParamField>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | One or more ranges have associated bills |
+| `404` | CAI not found |
+
+---
+
+## CAI Range Endpoints
+
+Base path: `/api/cai-ranges` and `/api/cais/:caiId/ranges`
+
+A CAI Range defines a contiguous block of bill numbers (`minRange` to `maxRange`). The active range's `currentNumber` counter is incremented atomically on every invoice creation. When a new range is added to an active CAI, all previous ranges for that CAI are deactivated.
+
+<Warning>
+  Range overlap validation is enforced store-wide. The `minRange` of any new range must be strictly greater than the highest `maxRange` ever registered for that store (across all CAIs and ranges). This prevents duplicate bill numbers even after CAI renewal.
+</Warning>
+
+---
+
+### `GET /api/cai-ranges`
+
+Returns a paginated, time-descending list of all CAI Ranges. Each record includes the parent CAI object.
+
+**Query parameters**
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum records to return.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Records to skip.
+</ParamField>
+
+---
+
+### `GET /api/cais/:caiId/ranges`
+
+Returns all CAI Ranges belonging to a specific CAI, paginated.
+
+**Path parameter**
+
+<ParamField path="caiId" type="string (UUID)" required>
+  UUID of the parent CAI.
+</ParamField>
+
+**Query parameters**
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum records to return.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Records to skip.
+</ParamField>
+
+---
+
+### `GET /api/cai-ranges/:id`
+
+Returns a single CAI Range by its UUID, including the parent CAI object.
+
+**Path parameter**
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the CAI Range.
+</ParamField>
+
+---
+
+### `POST /api/cai-ranges`
+
+Creates a new bill-number range under an **active, non-expired** CAI. On success:
+1. All currently active ranges for the parent CAI are deactivated.
+2. The new range is created with `currentNumber = 0` and `isActive = true`.
+
+**Request body**
+
+<ParamField body="caiId" type="string (UUID)" required>
+  UUID of the parent CAI. Must be active and not expired.
+</ParamField>
+
+<ParamField body="minRange" type="integer" required>
+  Starting bill number for this range. Must exceed the store's global highest `maxRange`.
+</ParamField>
+
+<ParamField body="maxRange" type="integer" required>
+  Ending bill number for this range. Must be ≥ `minRange`.
+</ParamField>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | Invalid/negative ranges, CAI is inactive or expired, or overlap with existing store ranges |
+| `404` | CAI not found |
+
+---
+
+### `PUT /api/cai-ranges/:id`
+
+Extends the `maxRange` of an existing CAI Range. This is the only field that can be updated. The new value must be greater than the current `maxRange`. The operation is blocked if any bills have already been issued against this range.
+
+**Path parameter**
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the CAI Range to update.
+</ParamField>
+
+**Request body**
+
+<ParamField body="maxRange" type="integer" required>
+  The new upper bound. Must be greater than both the current `maxRange` and the current `currentNumber`.
+</ParamField>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | New `maxRange` is not greater than the current value, is less than `currentNumber`, or bills already exist for this range |
+| `404` | Range not found |
+
+---
+
+### `DELETE /api/cai-ranges/:id`
+
+Hard-deletes a single CAI Range. Blocked if any bill has been issued against this range.
+
+**Path parameter**
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the CAI Range to delete.
+</ParamField>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | Range has associated bills |
+| `404` | Range not found |
+
+---
+
+## Data Models
+
+### CAI
+
+<ResponseField name="caiId" type="string (UUID)">
+  Primary key, auto-generated UUIDv4.
+</ResponseField>
+
+<ResponseField name="governmentId" type="string">
+  The official CAI authorization code from SAR. Maximum 75 characters. Unique index enforced.
+</ResponseField>
+
+<ResponseField name="expirationDate" type="string (date-time)">
+  Date after which the CAI is no longer valid for new invoices.
+</ResponseField>
+
+<ResponseField name="documentType" type="string">
+  SAR document type. Defaults to `"01"` (standard invoice). Embedded in the formatted `billNumberFinal`.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Whether this CAI is currently the active one for its store. Only one CAI per store can be active at a time.
+</ResponseField>
+
+<ResponseField name="storeId" type="string (UUID)">
+  Foreign key to the `stores` table.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string (date-time)">
+  Record creation timestamp.
+</ResponseField>
+
+<ResponseField name="deletedAt" type="string (date-time) | null">
+  Soft-delete timestamp. Non-null means the record is archived.
+</ResponseField>
+
+---
+
+### CaiRange
+
+<ResponseField name="caiRangeId" type="string (UUID)">
+  Primary key, auto-generated UUIDv4.
+</ResponseField>
+
+<ResponseField name="caiId" type="string (UUID)">
+  Foreign key linking this range to its parent CAI.
+</ResponseField>
+
+<ResponseField name="minRange" type="integer">
+  Lowest bill number in this authorized range.
+</ResponseField>
+
+<ResponseField name="maxRange" type="integer">
+  Highest bill number in this authorized range.
+</ResponseField>
+
+<ResponseField name="currentNumber" type="integer">
+  Offset from `minRange` representing how many bills have been issued. The next bill number is `minRange + currentNumber`. Starts at `0`.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Whether this is the currently active range for its parent CAI. Only one range per CAI can be active at a time.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string (date-time)">
+  Record creation timestamp.
+</ResponseField>
+
+<ResponseField name="deletedAt" type="string (date-time) | null">
+  Soft-delete timestamp.
+</ResponseField>

@@ -1,0 +1,235 @@
+---
+title: "Categories API — Organize Products by Category"
+sidebarTitle: "Categories"
+description: "Create and manage product categories in Credith. Categories can be activated or deactivated and are linked to products through a many-to-many join table."
+---
+
+The Categories API lets you group products into logical collections that aid navigation and reporting throughout Credith. Each category has a human-readable name and a description, and carries an `isActive` flag that can be toggled without deleting the record. Categories are linked to products through the `products_categories` join table — a single product can belong to multiple categories, and a category can contain many products. Category names are **stored in lowercase** and must be unique; attempting to create or rename a category to a name that already exists returns a `400` error.
+
+---
+
+## List Categories
+
+```http
+GET /api/categories
+```
+
+Returns a paginated list of all categories, ordered by `createdAt` descending (newest first). Accessible by OWNER, ADMIN, and EMPLOYEE roles.
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of categories to return per page.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip before returning results. Used for pagination.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "total": 8,
+  "data": [
+    {
+      "categoryId": "7d4d0f83-f2d7-4d58-a48b-cf2d2f75d4d1",
+      "name": "bebidas",
+      "description": "Bebidas frías y calientes",
+      "isActive": true,
+      "createdAt": "2024-11-15T10:22:00.000Z",
+      "updatedAt": "2024-11-15T10:22:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## Create Category
+
+```http
+POST /api/categories
+```
+
+Creates a new category. Requires `OWNER` role. Both `name` and `description` are required and cannot be blank. The `name` is trimmed and converted to lowercase before being stored. If a category with the same normalized name already exists, the request is rejected with `400`.
+
+<ParamField body="name" type="string" required>
+  The category name. Trimmed of leading/trailing whitespace and lowercased before storage. Must be unique.
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  A short description explaining what kinds of products belong to this category. Cannot be blank.
+</ParamField>
+
+<Note>
+  Category names are compared after lowercasing and trimming. Submitting `"Bebidas"`, `"BEBIDAS"`, or `"  bebidas  "` will all be treated as duplicate of an existing `"bebidas"` category and will return a `400` error.
+</Note>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/categories \
+  -H "Content-Type: application/json" \
+  -H "Cookie: token=<your-session-token>" \
+  -d '{
+    "name": "Bebidas",
+    "description": "Bebidas frías y calientes"
+  }'
+```
+
+```json Response 201
+{
+  "message": "Categoria creada exitosamente",
+  "category": {
+    "categoryId": "7d4d0f83-f2d7-4d58-a48b-cf2d2f75d4d1",
+    "name": "bebidas",
+    "description": "Bebidas frías y calientes",
+    "isActive": true,
+    "createdAt": "2024-11-15T10:22:00.000Z",
+    "updatedAt": "2024-11-15T10:22:00.000Z"
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Update Category
+
+```http
+PUT /api/categories/:categoryId
+```
+
+Updates the `name` and/or `description` of an existing category. Requires `OWNER` role. Both fields are required in the request body. The uniqueness check is applied to the new name — it is allowed to match the current record's own name (i.e., you can re-save without changing the name).
+
+<ParamField path="categoryId" type="string (UUID)" required>
+  UUID of the category to update.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  New name for the category. Trimmed and lowercased before storage. Must be unique (excluding the current record).
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Updated description for the category. Cannot be blank.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "message": "Categoria actualizada correctamente",
+  "category": {
+    "categoryId": "7d4d0f83-f2d7-4d58-a48b-cf2d2f75d4d1",
+    "name": "hogar",
+    "description": "Productos para el hogar",
+    "isActive": true,
+    "createdAt": "2024-11-15T10:22:00.000Z",
+    "updatedAt": "2024-11-20T08:45:00.000Z"
+  }
+}
+```
+
+---
+
+## Activate Category
+
+```http
+PATCH /api/categories/:categoryId/activate
+```
+
+Sets `isActive` to `true` on the specified category. Returns `400` if the category is already active. Requires `OWNER` role.
+
+<ParamField path="categoryId" type="string (UUID)" required>
+  UUID of the category to activate.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "message": "Categoría activada correctamente",
+  "category": {
+    "categoryId": "7d4d0f83-f2d7-4d58-a48b-cf2d2f75d4d1",
+    "name": "bebidas",
+    "description": "Bebidas frías y calientes",
+    "isActive": true
+  }
+}
+```
+
+---
+
+## Deactivate Category
+
+```http
+PATCH /api/categories/:categoryId/deactivate
+```
+
+Sets `isActive` to `false` on the specified category. Returns `400` if the category is already inactive. Requires `OWNER` role. Deactivating a category does not remove it from the database or unlink it from existing products.
+
+<ParamField path="categoryId" type="string (UUID)" required>
+  UUID of the category to deactivate.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "message": "Categoría desactivada correctamente",
+  "category": {
+    "categoryId": "7d4d0f83-f2d7-4d58-a48b-cf2d2f75d4d1",
+    "name": "bebidas",
+    "description": "Bebidas frías y calientes",
+    "isActive": false
+  }
+}
+```
+
+---
+
+## Category Object
+
+<ResponseField name="categoryId" type="string (UUID)">
+  Unique identifier for the category. Auto-generated as UUIDv4.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  The category name, stored in lowercase. Unique across all categories.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description of the category's purpose.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Indicates whether the category is currently active. Controlled via the activate/deactivate endpoints.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string (ISO 8601)">
+  Timestamp when the category was created.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string (ISO 8601)">
+  Timestamp of the last update to the category record.
+</ResponseField>
+
+---
+
+## Role Requirements
+
+| Endpoint | Required Role |
+|----------|---------------|
+| `GET /api/categories` | OWNER, ADMIN, EMPLOYEE |
+| `POST /api/categories` | OWNER |
+| `PUT /api/categories/:categoryId` | OWNER |
+| `PATCH /api/categories/:categoryId/activate` | OWNER |
+| `PATCH /api/categories/:categoryId/deactivate` | OWNER |
+
+---
+
+## Error Responses
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Missing or blank `name`/`description`, duplicate category name, or toggling a status that is already set |
+| `404` | Category with the specified `categoryId` not found |
+| `500` | Unexpected server error |

@@ -1,72 +1,106 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Credith",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "primary": "#1e8e3e",
+    "light": "#35b36b",
+    "dark": "#156a2e"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/RoyGeova07/Credith"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/RoyGeova07/Credith"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "deployment"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/roles-permissions",
+              "concepts/cai-invoicing",
+              "concepts/payment-plans",
+              "concepts/inventory"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/authentication",
+              "guides/creating-a-sale",
+              "guides/managing-stores",
+              "guides/reports"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/authentication"
+            ]
+          },
+          {
+            "group": "Users & Access",
+            "pages": [
+              "api-reference/users",
+              "api-reference/roles"
+            ]
+          },
+          {
+            "group": "Organization",
+            "pages": [
+              "api-reference/companies",
+              "api-reference/stores",
+              "api-reference/checkout-machines"
+            ]
+          },
+          {
+            "group": "Catalog",
+            "pages": [
+              "api-reference/products",
+              "api-reference/categories",
+              "api-reference/store-inventory"
+            ]
+          },
+          {
+            "group": "Billing & Payments",
+            "pages": [
+              "api-reference/cai",
+              "api-reference/bills",
+              "api-reference/payment-plans",
+              "api-reference/clients"
+            ]
+          },
+          {
+            "group": "Analytics",
+            "pages": [
+              "api-reference/reports"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

@@ -1,0 +1,200 @@
+---
+title: "Set Up Companies, Stores, and Staff"
+sidebarTitle: "Managing Stores"
+description: "Create a company, add stores under it, assign users to stores, configure checkout machines, and control active status — all through Credith's organization APIs."
+---
+
+Credith organises its data around a three-level hierarchy: a **company** (empresa) owns one or more **stores** (tiendas/sucursales), and each store has **users** (staff) and **checkout machines** (cajas de facturación) assigned to it. A user belongs to exactly one store and one checkout machine, while the company record holds the legal identity — `name` and RTN (Registro Tributario Nacional) — that is stamped on every invoice at bill time. Getting this hierarchy right before processing sales is essential, as the bill controller validates each layer during invoice creation.
+
+## Setup Flow
+
+<Steps>
+  <Step title="Create a company">
+    `POST /api/companies` creates the top-level legal entity. `name` and `rtn` are required; the RTN must be unique across the system.
+
+    ```bash
+    curl -X POST http://localhost:3000/api/companies \
+      -H "Content-Type: application/json" \
+      -d '{
+        "name": "ServiCredit Honduras",
+        "rtn": "08011999123456",
+        "email": "contacto@servicredit.hn",
+        "address": "Col. Palmira, Tegucigalpa"
+      }'
+    ```
+
+    A `201` response returns the new company record including the generated `companyId` UUID. If the RTN already exists the server returns `400 Ya existe una empresa con ese RTN`.
+
+    ```json
+    {
+      "message": "Empresa creada correctamente",
+      "company": {
+        "companyId": "a11111e5-9ae8-4597-b95e-9889028f0001",
+        "name": "ServiCredit Honduras",
+        "rtn": "08011999123456",
+        "email": "contacto@servicredit.hn",
+        "address": "Col. Palmira, Tegucigalpa"
+      }
+    }
+    ```
+
+    <Note>
+      The `companies` endpoints require the **OWNER** role via `roleMiddleware`. Requests without a valid OWNER-role JWT cookie will be rejected.
+    </Note>
+  </Step>
+
+  <Step title="Create a store under the company">
+    `POST /api/stores` creates a branch linked to the company. `storeNumber` must be a positive integer and `companyId` must reference an existing company.
+
+    ```bash
+    curl -X POST http://localhost:3000/api/stores \
+      -H "Content-Type: application/json" \
+      -b cookies.txt \
+      -d '{
+        "storeNumber": 1,
+        "address": 101,
+        "companyId": "a11111e5-9ae8-4597-b95e-9889028f0001"
+      }'
+    ```
+
+    A `201` response returns the created store:
+
+    ```json
+    {
+      "message": "Tienda creada correctamente",
+      "store": {
+        "storeId": "b22222e5-9ae8-4597-b95e-9889028f0002",
+        "storeNumber": 1,
+        "address": 101,
+        "isActive": true,
+        "companyId": "a11111e5-9ae8-4597-b95e-9889028f0001"
+      }
+    }
+    ```
+
+    <Note>
+      The `address` field on the `cd.stores` table is typed as `INTEGER` in the database schema — it represents a store number or location code rather than a free-text address string. Pass an integer value such as `101` or `2`. Free-text branch addresses live on the `cd.companies` record.
+    </Note>
+
+    `POST /api/stores` is protected by `authMiddleware` + `roleMiddleware(ROLE.ADMIN, ROLE.OWNER)`, so a valid auth cookie with at least an ADMIN role is required.
+  </Step>
+
+  <Step title="Register users and assign them to a store">
+    `POST /api/users` accepts a `storeId` field that links the new user to their branch. Every user must be assigned to a store at creation time — the `storeId` is validated server-side and the request is rejected if the store does not exist.
+
+    ```bash
+    curl -X POST http://localhost:3000/api/users \
+      -H "Content-Type: application/json" \
+      -d '{
+        "first_name": "Pedro",
+        "second_name": "Luis",
+        "first_last_name": "Martínez",
+        "second_last_name": "Cruz",
+        "email": "pedro.martinez@servicredit.hn",
+        "password": "clave456",
+        "storeId": "b22222e5-9ae8-4597-b95e-9889028f0002",
+        "checkoutMachineId": "c33333e5-9ae8-4597-b95e-9889028f0003",
+        "role": "EMPLOYEE"
+      }'
+    ```
+  </Step>
+
+  <Step title="Assign roles to users">
+    Roles (`Employee`, `Admin`, `Owner`) are seeded in `cd.roles`. You can associate a role to a user after creation via the dedicated endpoint:
+
+    ```bash
+    curl -X POST http://localhost:3000/api/roles/associate-user \
+      -H "Content-Type: application/json" \
+      -d '{
+        "userId": "d44444e5-9ae8-4597-b95e-9889028f0004",
+        "roleId": "e55555e5-9ae8-4597-b95e-9889028f0005"
+      }'
+    ```
+
+    This inserts a row into the `cd.users_roles` junction table. A user can hold multiple roles; the login controller uses the **first** role returned (`user.roles?.[0]?.name`) to sign the JWT.
+  </Step>
+
+  <Step title="Create a checkout machine and associate it to a cashier">
+    Every user who will process sales needs a checkout machine. First create the machine:
+
+    ```bash
+    curl -X POST http://localhost:3000/api/checkout-machines \
+      -H "Content-Type: application/json" \
+      -d '{
+        "machineNumber": 1,
+        "name": "Caja Principal",
+        "userId": "d44444e5-9ae8-4597-b95e-9889028f0004"
+      }'
+    ```
+
+    If the machine already exists but needs to be re-associated to a different cashier, use the associate endpoint:
+
+    ```bash
+    curl -X PUT http://localhost:3000/api/checkout-machines/f66666e5-9ae8-4597-b95e-9889028f0006/associate-user \
+      -H "Content-Type: application/json" \
+      -d '{
+        "userId": "d44444e5-9ae8-4597-b95e-9889028f0004"
+      }'
+    ```
+
+    The `machineNumber` is stamped on each generated invoice as part of the `billNumberFinal` string and also stored in `checkoutMachineNumber` on the `cd.bills` row.
+  </Step>
+</Steps>
+
+## Activating and Deactivating Stores
+
+Stores can be toggled active/inactive without deleting them. Deactivating a store prevents it from showing as a valid assignment target and excludes it from company-level revenue reports.
+
+<CodeGroup>
+
+```bash Deactivate a store
+curl -X PUT http://localhost:3000/api/stores/deactivate/b22222e5-9ae8-4597-b95e-9889028f0002 \
+  -H "Content-Type: application/json" \
+  -b cookies.txt
+```
+
+```bash Activate a store
+curl -X PUT http://localhost:3000/api/stores/activate/b22222e5-9ae8-4597-b95e-9889028f0002 \
+  -H "Content-Type: application/json" \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+Both endpoints require a valid auth cookie with at least ADMIN or OWNER role. Error responses:
+
+| Status | Message |
+|--------|---------|
+| `400` | `"La tienda ya esta desactivada"` / `"La tienda ya esta activa"` |
+| `404` | `"Tienda no encontrada"` |
+
+## Updating a Store
+
+`PUT /api/stores/:id` allows any combination of `storeNumber`, `address`, and `companyId` to be updated. Only the fields you send are changed.
+
+```bash
+curl -X PUT http://localhost:3000/api/stores/b22222e5-9ae8-4597-b95e-9889028f0002 \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "address": 202
+  }'
+```
+
+## Updating a Company
+
+`PUT /api/companies/:id` accepts `name`, `rtn`, `email`, and `address`. RTN changes are validated for uniqueness.
+
+```bash
+curl -X PUT http://localhost:3000/api/companies/a11111e5-9ae8-4597-b95e-9889028f0001 \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "email": "nuevo@servicredit.hn",
+    "address": "Blvd. Morazán, Tegucigalpa"
+  }'
+```
+
+<Tip>
+  If you are building an admin panel that needs to assign users to stores from a management interface, use `POST /api/admin-stores` — this endpoint is designed specifically to associate existing users with stores outside of the registration flow.
+</Tip>

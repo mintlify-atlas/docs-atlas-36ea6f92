@@ -1,0 +1,357 @@
+---
+title: "Store Inventory API — Track Per-Store Product Stock"
+sidebarTitle: "Store Inventory"
+description: "Query and manage per-store product inventory in Credith. Stock levels automatically decrement when invoices are created and can be updated directly via the inventory API."
+---
+
+The Store Inventory API exposes the `stores_inventories` table, which acts as the bridge between products and stores. Every time a product is added to a store — either at product creation time or via the product update endpoint — a row is inserted into `stores_inventories` associating that product with the store and recording its current `inStock` count. Because multiple stores can carry the same product, stock levels are tracked and managed **independently per store**. In addition to the standard read and update operations, the API provides endpoints for querying your own store's inventory, identifying low-stock items before they run out, and transferring units between stores without manual adjustments.
+
+---
+
+## The `stores_inventories` Table
+
+Each row in this table represents a single product-store relationship. The composite primary key is `(productId, storeId)`, meaning a product can appear in many stores but only once per store.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `productId` | UUID (PK) | References `products.product_id`. |
+| `storeId` | UUID (PK) | References `stores.store_id`. |
+| `inStock` | INTEGER | Current quantity available in this store. Defaults to `1`. |
+| `isActive` | BOOLEAN | Whether the product is visible/active in this store. Defaults to `true`. Set to `false` when the product is store-archived via `DELETE /api/products/:id?storeId=...`. |
+
+<Note>
+  Stock is decremented **atomically inside the bill creation transaction**. When `POST /api/bills` is processed, each line item in the invoice reduces the corresponding `inStock` value for the store where the sale occurs. If any product in the bill has insufficient stock at the time of checkout, the entire transaction is aborted and no inventory changes are committed.
+</Note>
+
+<Warning>
+  Attempting to create a bill that includes a product with zero or insufficient `inStock` will cause the entire bill creation to fail. Ensure inventory is sufficient before initiating a transaction — use the `GET /api/store-inventory/low-stock` endpoint to proactively monitor products approaching zero.
+</Warning>
+
+---
+
+## Get All Inventories (Paginated)
+
+```http
+GET /api/store-inventory
+```
+
+Returns a paginated list of all `stores_inventories` records across every store, with the associated product details and store data embedded in each row. Restricted to **OWNER** role only.
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of inventory records to return per page.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip. Used for pagination.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "total": 135,
+  "data": [
+    {
+      "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+      "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891",
+      "inStock": 120,
+      "isActive": true,
+      "product": {
+        "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+        "name": "Coca Cola 3L",
+        "description": "Refresco Coca Cola 3 litros",
+        "sellPrice": "45.00000000",
+        "imageUrl": "https://res.cloudinary.com/demo/image/upload/cocacola.jpg"
+      },
+      "store": {
+        "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891",
+        "address": 1,
+        "isActive": true
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Get Inventory for a Specific Store
+
+```http
+GET /api/store-inventory/store/:storeId
+```
+
+Returns all inventory records for a single store, including full product data for each entry. If the store does not exist, a `404` is returned. Restricted to **OWNER** role.
+
+<ParamField path="storeId" type="string (UUID)" required>
+  UUID of the store whose inventory you want to retrieve.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://your-domain.com/api/store-inventory/store/c3d4e5f6-a7b8-490a-bcde-f01234567891" \
+  -H "Cookie: token=<your-session-token>"
+```
+
+```json Response 200
+{
+  "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891",
+  "address": 1,
+  "isActive": true,
+  "products": [
+    {
+      "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+      "name": "Coca Cola 3L",
+      "description": "Refresco Coca Cola 3 litros",
+      "sellPrice": "45.00000000",
+      "stores_inventories": {
+        "inStock": 120
+      }
+    }
+  ]
+}
+```
+</CodeGroup>
+
+---
+
+## Get Stock for a Single Product in a Store
+
+```http
+GET /api/store-inventory/:storeId/:productId
+```
+
+Returns the specific inventory record for one product in one store. Returns `404` if no matching record exists (i.e., the product has never been registered in that store). Restricted to **OWNER** role.
+
+<ParamField path="storeId" type="string (UUID)" required>
+  UUID of the store.
+</ParamField>
+
+<ParamField path="productId" type="string (UUID)" required>
+  UUID of the product.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+  "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891",
+  "inStock": 120,
+  "isActive": true
+}
+```
+
+---
+
+## Get My Store's Inventory
+
+```http
+GET /api/store-inventory/my-store
+```
+
+Returns all inventory records for the store assigned to the currently authenticated user. The store is determined from `req.user.storeId` — no path or query parameter is needed. Returns `400` if the user does not have a store assigned. Accessible by any authenticated user.
+
+**Response**
+
+```json
+{
+  "total": 24,
+  "data": [
+    {
+      "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+      "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891",
+      "inStock": 120,
+      "isActive": true,
+      "product": {
+        "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+        "name": "Coca Cola 3L",
+        "description": "Refresco Coca Cola 3 litros",
+        "sellPrice": "45.00000000",
+        "buyPrice": "35.00000000",
+        "imageUrl": "https://res.cloudinary.com/demo/image/upload/cocacola.jpg",
+        "minGainPercentage": 20
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Get Low-Stock Items
+
+```http
+GET /api/store-inventory/low-stock
+```
+
+Returns inventory records where `inStock` is at or below the specified threshold. ADMIN users see only their own store; OWNER users see all stores belonging to their company. Accessible by **OWNER** and **ADMIN** roles.
+
+<ParamField query="threshold" type="integer" default="5">
+  Inventory quantity at or below which a product is considered low-stock. Must be `>= 0`. Defaults to `5`.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "data": [
+    {
+      "productId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891",
+      "inStock": 3,
+      "isActive": true,
+      "product": {
+        "productId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "name": "Agua 500ml"
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Update Stock
+
+```http
+PATCH /api/store-inventory/stock
+```
+
+Directly sets the `inStock` value for a specific product-store combination. Use this to perform manual stock corrections or restocking operations. Requires **OWNER** or **ADMIN** role.
+
+<ParamField body="productId" type="string (UUID)" required>
+  UUID of the product whose stock will be updated.
+</ParamField>
+
+<ParamField body="storeId" type="string (UUID)" required>
+  UUID of the store in which to update the stock count.
+</ParamField>
+
+<ParamField body="stock" type="integer" required>
+  The new stock count. Must be `>= 0`. This value **replaces** the current `inStock` value — it is not additive.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH https://your-domain.com/api/store-inventory/stock \
+  -H "Content-Type: application/json" \
+  -H "Cookie: token=<your-session-token>" \
+  -d '{
+    "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+    "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891",
+    "stock": 150
+  }'
+```
+
+```json Response 200
+{
+  "message": "Stock actualizado correctamente",
+  "stockActual": 150
+}
+```
+</CodeGroup>
+
+---
+
+## Transfer Stock Between Stores
+
+```http
+POST /api/store-inventory/transfer
+```
+
+Moves a quantity of a product from one store to another in a single operation. The source store's `inStock` is decremented and the destination store's `inStock` is incremented by the same amount. If the destination store does not yet have an inventory record for the product, one is created automatically. Requires **OWNER** role.
+
+<ParamField body="productId" type="string (UUID)" required>
+  UUID of the product to transfer.
+</ParamField>
+
+<ParamField body="fromStoreId" type="string (UUID)" required>
+  UUID of the store from which stock will be deducted. Must differ from `toStoreId`.
+</ParamField>
+
+<ParamField body="toStoreId" type="string (UUID)" required>
+  UUID of the store that will receive the transferred stock. Must differ from `fromStoreId`.
+</ParamField>
+
+<ParamField body="quantity" type="integer" required>
+  Number of units to transfer. Must be `>= 1`. Returns `400` if the source store has fewer units available than the requested quantity.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "message": "Transferencia exitosa"
+}
+```
+
+---
+
+## Inventory Record Object
+
+<ResponseField name="productId" type="string (UUID)">
+  UUID of the product. Part of the composite primary key.
+</ResponseField>
+
+<ResponseField name="storeId" type="string (UUID)">
+  UUID of the store. Part of the composite primary key.
+</ResponseField>
+
+<ResponseField name="inStock" type="integer">
+  Current quantity of the product available in the store. Decremented automatically by bill creation. Minimum is `0`; the API will reject negative values on manual updates.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Whether this product-store combination is currently active. Set to `false` when the product is store-level archived via `DELETE /api/products/:id?storeId=...`. Inactive inventory records are excluded from product listings.
+</ResponseField>
+
+<ResponseField name="product" type="object">
+  <Expandable title="Embedded product fields (included in list responses)">
+    <ResponseField name="productId" type="string (UUID)">
+      UUID of the product.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Display name of the product.
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Short description.
+    </ResponseField>
+    <ResponseField name="sellPrice" type="string (decimal)">
+      Retail price as a decimal string.
+    </ResponseField>
+    <ResponseField name="buyPrice" type="string (decimal)">
+      Cost price as a decimal string. Included in `my-store` responses.
+    </ResponseField>
+    <ResponseField name="imageUrl" type="string">
+      URL to the product image.
+    </ResponseField>
+    <ResponseField name="minGainPercentage" type="integer">
+      Minimum gain percentage. Included in `my-store` responses.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Role Requirements
+
+| Endpoint | Required Role |
+|----------|---------------|
+| `GET /api/store-inventory` | OWNER |
+| `GET /api/store-inventory/store/:storeId` | OWNER |
+| `GET /api/store-inventory/:storeId/:productId` | OWNER |
+| `GET /api/store-inventory/my-store` | Any authenticated user |
+| `GET /api/store-inventory/low-stock` | OWNER, ADMIN |
+| `PATCH /api/store-inventory/stock` | OWNER, ADMIN |
+| `POST /api/store-inventory/transfer` | OWNER |
+
+---
+
+## Error Responses
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Invalid stock value, missing required fields, insufficient stock for transfer, or `fromStoreId === toStoreId` |
+| `404` | Inventory record, store, or product not found |
+| `500` | Unexpected server error |

@@ -1,0 +1,376 @@
+---
+title: "Stores API — Manage Retail Locations Under a Company"
+sidebarTitle: "Stores"
+description: "Create and manage store locations. Each store belongs to a company and can be independently activated or deactivated. Products and users are assigned per store."
+---
+
+Stores represent individual physical retail locations operating under a parent company. Every store is linked to exactly one company via `companyId`, carries a unique store number, and an optional free-text address. Stores can be independently activated or deactivated — only active stores can participate in billing transactions and inventory management. Users (admins and employees) are assigned to stores, and each store maintains its own product inventory through the `stores_inventories` junction table.
+
+---
+
+## Endpoints overview
+
+| Method | Path | Auth required | Description |
+|--------|------|---------------|-------------|
+| `GET` | `/api/stores` | No | List stores (paginated, includes company) |
+| `GET` | `/api/stores/:id` | No | Get a single store by UUID |
+| `POST` | `/api/stores` | Admin / Owner | Create a new store |
+| `PUT` | `/api/stores/:id` | Admin / Owner | Update store fields |
+| `PUT` | `/api/stores/activate/:id` | Admin / Owner | Activate a store |
+| `PUT` | `/api/stores/deactivate/:id` | Admin / Owner | Deactivate a store |
+
+Read endpoints (`GET`) are public. Write operations require a valid session with an **Admin** or **Owner** role.
+
+---
+
+## List stores
+
+```http
+GET /api/stores
+```
+
+Returns a paginated list of stores. Each record includes the associated company object (`companyId`, `name`, `rtn`).
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of store records to return per page.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip before starting the page. Use with `limit` for pagination.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "total": 2,
+  "data": [
+    {
+      "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "storeNumber": 1,
+      "address": "Blvd. Morazán, Tegucigalpa",
+      "isActive": true,
+      "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+      "company": {
+        "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+        "name": "ServiCredit",
+        "rtn": "08011999123456"
+      },
+      "createdAt": "2024-02-01T08:00:00.000Z",
+      "updatedAt": "2024-02-01T08:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## Get store by ID
+
+```http
+GET /api/stores/:id
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the store to retrieve.
+</ParamField>
+
+Returns the full store object, including the embedded `company` object.
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Store object returned. |
+| `404` | No store found with the given ID. |
+
+```json
+{
+  "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+  "storeNumber": 1,
+  "address": "Blvd. Morazán, Tegucigalpa",
+  "isActive": true,
+  "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+  "company": {
+    "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+    "name": "ServiCredit",
+    "rtn": "08011999123456"
+  }
+}
+```
+
+---
+
+## Create a store
+
+```http
+POST /api/stores
+```
+
+<Note>
+  `storeNumber` is a **positive integer** — it identifies the store numerically within its company (e.g., Store 1, Store 2). It is not a street address. The optional `address` field holds the free-text street or location description.
+</Note>
+
+### Request body
+
+<ParamField body="storeNumber" type="integer" required>
+  Numeric identifier for the store within its company. Must be a positive integer (e.g., `1`, `2`, `5`). Non-integer or non-positive values return a `400` error.
+</ParamField>
+
+<ParamField body="companyId" type="string" required>
+  UUID of the parent company. The company must already exist — a `404` is returned if it does not.
+</ParamField>
+
+<ParamField body="address" type="string">
+  Optional free-text street address or location description for this store (e.g., `"Col. Palmira, Tegucigalpa"`). Stored as `NULL` if omitted.
+</ParamField>
+
+### Example request
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://your-domain.com/api/stores \
+  -H "Content-Type: application/json" \
+  -d '{
+    "storeNumber": 1,
+    "address": "Col. Palmira, Tegucigalpa",
+    "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001"
+  }'
+```
+
+```json Body
+{
+  "storeNumber": 1,
+  "address": "Col. Palmira, Tegucigalpa",
+  "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001"
+}
+```
+
+</CodeGroup>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `201` | Store created successfully. |
+| `400` | Validation failed — `storeNumber` missing, not a positive integer, or `companyId` blank. |
+| `404` | Parent company not found. |
+| `500` | Unexpected server error. |
+
+```json
+{
+  "message": "Tienda creada correctamente",
+  "store": {
+    "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "storeNumber": 1,
+    "address": "Col. Palmira, Tegucigalpa",
+    "isActive": true,
+    "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001",
+    "createdAt": "2024-06-01T14:30:00.000Z",
+    "updatedAt": "2024-06-01T14:30:00.000Z"
+  }
+}
+```
+
+---
+
+## Update a store
+
+```http
+PUT /api/stores/:id
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the store to update.
+</ParamField>
+
+All body fields are optional. Only the fields provided will be updated.
+
+<ParamField body="storeNumber" type="integer">
+  New store number. Must remain a positive integer if supplied.
+</ParamField>
+
+<ParamField body="address" type="string">
+  New free-text address. Pass an empty string or omit to clear the field.
+</ParamField>
+
+<ParamField body="companyId" type="string">
+  Reassign the store to a different company UUID. The target company must exist.
+</ParamField>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Store updated successfully. |
+| `400` | Validation failed — invalid `storeNumber` or blank `companyId`. |
+| `404` | Store or target company not found. |
+| `500` | Unexpected server error. |
+
+```json
+{
+  "message": "Tienda actualizada correctamente",
+  "store": {
+    "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "storeNumber": 2,
+    "address": "San Pedro Sula, Cortés",
+    "isActive": true,
+    "companyId": "3f2e1a00-bc45-4d78-a9f2-000000000001"
+  }
+}
+```
+
+---
+
+## Activate a store
+
+```http
+PUT /api/stores/activate/:id
+```
+
+Sets `isActive` to `true` for the specified store. Returns `400` if the store is already active.
+
+<ParamField path="id" type="string" required>
+  UUID of the store to activate.
+</ParamField>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Store activated successfully. |
+| `400` | Store is already active. |
+| `404` | Store not found. |
+
+```json
+{ "message": "Tienda activada correctamente" }
+```
+
+---
+
+## Deactivate a store
+
+```http
+PUT /api/stores/deactivate/:id
+```
+
+Sets `isActive` to `false` for the specified store. Returns `400` if the store is already inactive.
+
+<ParamField path="id" type="string" required>
+  UUID of the store to deactivate.
+</ParamField>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Store deactivated successfully. |
+| `400` | Store is already inactive. |
+| `404` | Store not found. |
+
+```json
+{ "message": "Tienda desactivada correctamente" }
+```
+
+---
+
+## Admin store assignment
+
+Admin users can be assigned to a specific store so they manage that location. The `admin-stores` resource also exposes two utility endpoints restricted to the **Owner** role.
+
+### List admins with their assigned store
+
+```http
+GET /api/admin-stores
+```
+
+Returns all users who hold the `ADMIN` role, each with their assigned `store` object embedded (or `null` if unassigned).
+
+```json
+[
+  {
+    "userId": "u1u1u1u1-0000-4000-8000-000000000001",
+    "first_name": "María",
+    "first_last_name": "López",
+    "email": "maria@servicredit.com",
+    "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "store": {
+      "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "storeNumber": 1,
+      "address": "Col. Palmira, Tegucigalpa",
+      "isActive": true
+    },
+    "roles": [{ "roleId": "r1r1r1r1-0000-0000-0000-000000000001", "name": "ADMIN" }]
+  }
+]
+```
+
+### Remove store assignment from an admin
+
+```http
+DELETE /api/admin-stores/:userId/store
+```
+
+Clears the `storeId` field (`NULL`) on the specified user, effectively un-assigning them from their current store.
+
+<ParamField path="userId" type="string" required>
+  UUID of the admin user whose store assignment should be removed.
+</ParamField>
+
+| Status | Description |
+|--------|-------------|
+| `200` | Assignment removed successfully. |
+| `404` | User not found. |
+
+```json
+{ "message": "Tienda removida correctamente" }
+```
+
+---
+
+## Store object reference
+
+<ResponseField name="storeId" type="string">
+  UUID v4 primary key, auto-generated on creation.
+</ResponseField>
+
+<ResponseField name="storeNumber" type="integer">
+  Numeric identifier for this store within its company. Positive integer, not nullable.
+</ResponseField>
+
+<ResponseField name="address" type="string | null">
+  Optional free-text street address or location description.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Whether the store is currently active. Defaults to `true` on creation. Only active stores can process bills.
+</ResponseField>
+
+<ResponseField name="companyId" type="string">
+  UUID of the parent company this store belongs to.
+</ResponseField>
+
+<ResponseField name="company" type="object">
+  Embedded company object included in list and single-record GET responses.
+
+  <Expandable title="company fields">
+    <ResponseField name="companyId" type="string">
+      UUID of the parent company.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Legal name of the company.
+    </ResponseField>
+    <ResponseField name="rtn" type="string">
+      Tax registration number of the company.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of record creation.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the most recent update.
+</ResponseField>

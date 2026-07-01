@@ -1,0 +1,376 @@
+---
+title: "Products API — Manage the Product Catalog"
+sidebarTitle: "Products"
+description: "Create, update, and archive products in Credith. Products can be assigned to multiple stores with independent stock levels and linked to one or more categories."
+---
+
+The Products API is the foundation of Credith's point-of-sale catalog. Every item that can be sold at a store must exist as a product record. Products carry pricing data — both cost (`buyPrice`) and sale price (`sellPrice`) — along with an optional minimum gain percentage that can be used to enforce margin rules at checkout. When a product is created, it is immediately registered in a store's inventory with a configurable initial stock count. Archiving a product via `DELETE` performs a **soft-delete**: the record is never physically removed from the database, and it can be fully restored at any time using the recover endpoint.
+
+---
+
+## List Products
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of products to return per page.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip before starting to return results. Used for pagination.
+</ParamField>
+
+<ParamField query="storeId" type="string (UUID)">
+  **OWNER only.** Filter products that belong to a specific store. ADMIN and EMPLOYEE users are automatically scoped to their assigned store and cannot override this.
+</ParamField>
+
+<ParamField query="category" type="string">
+  Filter products by category name (case-sensitive match against the category's `name` field).
+</ParamField>
+
+<ParamField query="archived" type="boolean" default="false">
+  When `true`, returns archived (soft-deleted) products instead of active ones. Only OWNER users can view the global archived list without a `storeId`. For store-scoped views, archived reflects inventory `isActive=false`.
+</ParamField>
+
+```http
+GET /api/products
+```
+
+Returns a paginated list of products, each with their linked categories and per-store inventory data. The shape of the response varies by role:
+
+- **OWNER** — sees all products across all stores unless `storeId` is provided.
+- **ADMIN / EMPLOYEE** — automatically scoped to their assigned store only.
+
+**Response**
+
+```json
+{
+  "total": 42,
+  "data": [
+    {
+      "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+      "name": "Coca Cola 3L",
+      "description": "Refresco Coca Cola 3 litros",
+      "sellPrice": "45.00000000",
+      "buyPrice": "35.00000000",
+      "minGainPercentage": 20,
+      "imageUrl": "https://res.cloudinary.com/demo/image/upload/cocacola.jpg",
+      "isActive": true,
+      "categories": [
+        { "categoryId": "7d4d0f83-f2d7-4d58-a48b-cf2d2f75d4d1", "name": "bebidas", "description": "Bebidas frías y calientes" }
+      ],
+      "inventories": [
+        { "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891", "inStock": 120, "store": { "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891", "address": 1 } }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## Get Product by ID
+
+```http
+GET /api/products/:id
+```
+
+Returns a single product identified by its UUID, including all associated categories. Returns `404` if the product does not exist or has been globally archived.
+
+**Path parameter**
+
+<ParamField path="id" type="string (UUID)" required>
+  The UUID of the product to retrieve.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "productId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+  "name": "Coca Cola 3L",
+  "description": "Refresco Coca Cola 3 litros",
+  "buyPrice": "35.00000000",
+  "sellPrice": "45.00000000",
+  "minGainPercentage": 20,
+  "imageUrl": "https://res.cloudinary.com/demo/image/upload/cocacola.jpg",
+  "isActive": true,
+  "categories": [
+    {
+      "categoryId": "7d4d0f83-f2d7-4d58-a48b-cf2d2f75d4d1",
+      "name": "bebidas",
+      "description": "Bebidas frías y calientes"
+    }
+  ]
+}
+```
+
+---
+
+## Create Product
+
+```http
+POST /api/products
+```
+
+Creates a new product and simultaneously registers it in a store's inventory with the specified initial stock. Requires `OWNER` role. Both `categoryId` and `storeId` must reference existing records — the server validates both before creating anything.
+
+<ParamField body="name" type="string" required>
+  Display name of the product. Must be unique across all products (enforced by a unique index on the `name` column).
+</ParamField>
+
+<ParamField body="sellPrice" type="number" required>
+  The retail sale price of the product. Must be a non-negative number. Stored as `DECIMAL(16,8)`.
+</ParamField>
+
+<ParamField body="categoryId" type="string (UUID)" required>
+  UUID of the category to assign this product to. The category must already exist.
+</ParamField>
+
+<ParamField body="storeId" type="string (UUID)" required>
+  UUID of the store where the product's initial inventory entry will be created.
+</ParamField>
+
+<ParamField body="description" type="string">
+  A short description of the product. Stored as a string; omitted values are saved as `NULL`.
+</ParamField>
+
+<ParamField body="buyPrice" type="number" default="0">
+  The cost price (purchase price) of the product. Defaults to `0` if omitted or negative.
+</ParamField>
+
+<ParamField body="minGainPercentage" type="integer">
+  Minimum acceptable profit margin percentage. Used as a soft business rule reference at checkout. Stored as `SMALLINT`.
+</ParamField>
+
+<ParamField body="imageUrl" type="string">
+  URL pointing to the product's image. Typically a Cloudinary-hosted URL obtained from the frontend upload widget.
+</ParamField>
+
+<ParamField body="initialStock" type="integer" default="1">
+  The opening stock count for the product in the specified store. Defaults to `1` if omitted or less than zero.
+</ParamField>
+
+<Tip>
+  `imageUrl` can be populated automatically by using the Cloudinary upload preset configured in the Credith frontend. The upload widget returns a secure URL that you can pass directly to this field.
+</Tip>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/products \
+  -H "Content-Type: application/json" \
+  -H "Cookie: token=<your-session-token>" \
+  -d '{
+    "name": "Coca Cola 3L",
+    "description": "Refresco Coca Cola 3 litros",
+    "buyPrice": 35,
+    "sellPrice": 45,
+    "minGainPercentage": 20,
+    "imageUrl": "https://res.cloudinary.com/demo/image/upload/cocacola.jpg",
+    "categoryId": "7d4d0f83-f2d7-4d58-a48b-cf2d2f75d4d1",
+    "storeId": "c3d4e5f6-a7b8-490a-bcde-f01234567891",
+    "initialStock": 100
+  }'
+```
+
+```json Response 201
+{
+  "message": "Producto agregado existosamente"
+}
+```
+</CodeGroup>
+
+---
+
+## Update Product
+
+```http
+PUT /api/products/:id
+```
+
+Updates the fields of an existing product. The `productId` in the request body **must match** the `:id` path parameter — the server returns `400` if they differ. Requires `OWNER` or `ADMIN` role.
+
+You can optionally update the product's store-level stock in the same request by supplying `storeId` and `stock` together.
+
+<ParamField path="id" type="string (UUID)" required>
+  The UUID of the product to update. Must match `productId` in the body.
+</ParamField>
+
+<ParamField body="productId" type="string (UUID)" required>
+  Must be identical to the `:id` path parameter.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Updated display name for the product. Cannot be empty.
+</ParamField>
+
+<ParamField body="sellPrice" type="number" required>
+  Updated retail price. Must be `>= 0`.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated product description.
+</ParamField>
+
+<ParamField body="buyPrice" type="number">
+  Updated cost price. Defaults to `0` if omitted.
+</ParamField>
+
+<ParamField body="minGainPercentage" type="integer">
+  Updated minimum gain percentage.
+</ParamField>
+
+<ParamField body="imageUrl" type="string">
+  Updated image URL.
+</ParamField>
+
+<ParamField body="categoryId" type="string (UUID)">
+  If provided, replaces the product's entire category assignment with this single category (uses `setCategories`). The category must exist.
+</ParamField>
+
+<ParamField body="storeId" type="string (UUID)">
+  If provided alongside `stock`, the inventory record for this product in the given store will be updated. Must be provided together with `stock`.
+</ParamField>
+
+<ParamField body="stock" type="integer">
+  New stock count for the product at `storeId`. Must be `>= 0`. Requires `storeId` to also be present.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "message": "Producto editado exitosamente"
+}
+```
+
+---
+
+## Archive Product (Soft-Delete)
+
+```http
+DELETE /api/products/:id
+```
+
+Soft-deletes a product. Behavior depends on the caller's role and whether a `storeId` query parameter is provided.
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the product to archive.
+</ParamField>
+
+<ParamField query="storeId" type="string (UUID)">
+  - **Optional for OWNER** — archives the product only from the specified store (sets `isActive=false` on the `stores_inventories` row). The product remains visible in other stores.
+  - **Required for ADMIN** — ADMIN users must always provide `storeId`; they cannot perform a global archive.
+  - If omitted and the caller is OWNER, the product is **globally archived** via a Sequelize paranoid soft-delete (sets `deletedAt`).
+</ParamField>
+
+<Note>
+  Archived products are **never physically removed** from the database. The soft-delete sets a `deleted_at` timestamp (global archive) or sets `isActive=false` on the inventory row (store-level archive). All historical invoice data referencing the product remains intact. Use `POST /api/products/:id/recover` to restore them.
+</Note>
+
+**Response**
+
+```json
+{
+  "message": "Producto archivado globalmente"
+}
+```
+
+---
+
+## Recover Product
+
+```http
+POST /api/products/:id/recover
+```
+
+Restores a previously archived product. Like the delete endpoint, behavior varies based on whether `storeId` is supplied.
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the product to restore.
+</ParamField>
+
+<ParamField query="storeId" type="string (UUID)">
+  If provided, restores the product only within that store's inventory (sets `isActive=true`). If omitted, performs a global restore via Sequelize's `restore()`, clearing the `deleted_at` timestamp.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "message": "Producto restaurado globalmente"
+}
+```
+
+---
+
+## Product Object
+
+<ResponseField name="productId" type="string (UUID)">
+  Unique identifier for the product. Auto-generated as UUIDv4.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name of the product. Unique across all products.
+</ResponseField>
+
+<ResponseField name="sellPrice" type="string (decimal)">
+  The retail price of the product, returned as a decimal string with 8 decimal places (e.g. `"45.00000000"`). Stored as `DECIMAL(16,8)`.
+</ResponseField>
+
+<ResponseField name="buyPrice" type="string (decimal)">
+  The purchase/cost price. Defaults to `0.00000000`. Stored as `DECIMAL(16,8)`.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Short description of the product.
+</ResponseField>
+
+<ResponseField name="minGainPercentage" type="integer">
+  Minimum profit margin percentage. May be `null` if not set.
+</ResponseField>
+
+<ResponseField name="imageUrl" type="string">
+  URL to the product's image. May be `null` if not set.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Whether the product is currently active. Managed through archive/recover operations.
+</ResponseField>
+
+<ResponseField name="categories" type="array">
+  <Expandable title="Category object">
+    <ResponseField name="categoryId" type="string (UUID)">
+      Unique identifier of the category.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Name of the category (stored in lowercase).
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Description of the category.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="inventories" type="array">
+  <Expandable title="Inventory entry object">
+    <ResponseField name="storeId" type="string (UUID)">
+      UUID of the store this inventory entry belongs to.
+    </ResponseField>
+    <ResponseField name="inStock" type="integer">
+      Current quantity of the product in stock at this store.
+    </ResponseField>
+    <ResponseField name="store" type="object">
+      Abbreviated store object containing `storeId` and `address`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Error Responses
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Missing required field, invalid price, mismatched `productId`, or invalid stock value |
+| `403` | Role is not permitted to perform the action (e.g., ADMIN attempting a global archive) |
+| `404` | Product, category, store, or inventory record not found |
+| `500` | Unexpected server error |

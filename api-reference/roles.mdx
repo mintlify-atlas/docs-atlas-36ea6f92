@@ -1,0 +1,357 @@
+---
+title: "Roles API — Create and Assign User Roles"
+sidebarTitle: "Roles"
+description: "Manage user roles (Owner, Admin, Employee) in Credith. List roles, create new ones, assign roles to users, and delete roles through the Roles API."
+---
+
+The Roles API controls the permission tiers within Credith. Every user is assigned at least one role from a fixed set of three names, and that role is embedded in their JWT — governing which protected routes they may access. Roles are stored in the `cd.roles` table and linked to users through the `cd.users_roles` junction table. All role management endpoints require an authenticated session with the `Owner` role.
+
+<Note>
+  Only three role names are valid in Credith: **`Employee`**, **`Admin`**, and **`Owner`**. The API performs a case-insensitive match on the submitted name, normalizing it to the canonical casing before saving. Any other value will be rejected with a `400` error.
+</Note>
+
+<Warning>
+  All role endpoints require a valid JWT `token` cookie **and** the `Owner` role. Requests from `Admin` or `Employee` sessions will be rejected. Deleting a role (`DELETE /api/roles/:id`) is a **hard delete** — the record is permanently removed from the database and cannot be recovered. Ensure no users depend on the role before deleting it.
+</Warning>
+
+---
+
+## GET /api/roles
+
+Returns a paginated list of all roles, ordered alphabetically by name (ascending). Use `limit` and `offset` to page through results.
+
+**Authentication:** ✅ Required — `Owner` role
+
+### Query Parameters
+
+<ParamField query="limit" type="number" default="10">
+  Maximum number of role records to return per page. Defaults to `10`.
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of records to skip before collecting results. Defaults to `0`.
+</ParamField>
+
+### Response
+
+**`200 OK`**
+
+<ResponseField name="total" type="number">
+  Total count of roles in the database (before pagination).
+</ResponseField>
+
+<ResponseField name="data" type="array">
+  Array of role objects for the current page, sorted by `name ASC`.
+
+  <Expandable title="Role object fields">
+    <ResponseField name="roleId" type="string (UUID)">
+      Unique identifier for the role.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Role name. One of: `Employee`, `Admin`, `Owner`.
+    </ResponseField>
+    <ResponseField name="description" type="string | null">
+      Optional free-text description of the role's purpose.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+{
+  "total": 3,
+  "data": [
+    {
+      "roleId": "11111111-aaaa-4000-8000-aaaaaaaaaaaa",
+      "name": "Admin",
+      "description": "Store-level administrator with full POS access"
+    },
+    {
+      "roleId": "22222222-bbbb-4000-8000-bbbbbbbbbbbb",
+      "name": "Employee",
+      "description": "Standard checkout operator"
+    },
+    {
+      "roleId": "33333333-cccc-4000-8000-cccccccccccc",
+      "name": "Owner",
+      "description": "Platform owner with system-wide privileges"
+    }
+  ]
+}
+```
+
+---
+
+## GET /api/roles/:id
+
+Returns a single role record by its UUID.
+
+**Authentication:** ✅ Required — `Owner` role
+
+### Path Parameters
+
+<ParamField path="id" type="string (UUID)" required>
+  The `roleId` of the role to retrieve.
+</ParamField>
+
+### Response
+
+**`200 OK`** — Returns the role object.
+
+<ResponseField name="roleId" type="string (UUID)">
+  Unique identifier for the role.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Role name (`Employee`, `Admin`, or `Owner`).
+</ResponseField>
+
+<ResponseField name="description" type="string | null">
+  Optional description of the role.
+</ResponseField>
+
+**`404 Not Found`**
+
+```json
+{ "message": "Rol no encontrado" }
+```
+
+```json Example Response
+{
+  "roleId": "22222222-bbbb-4000-8000-bbbbbbbbbbbb",
+  "name": "Employee",
+  "description": "Standard checkout operator"
+}
+```
+
+---
+
+## POST /api/roles
+
+Creates a new role. Because only three role names are permitted system-wide and each must be unique, you can create at most three roles (one per name). Attempting to create a role with a name that already exists returns a `400` error.
+
+**Authentication:** ✅ Required — `Owner` role
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  The role name. Must be one of `Employee`, `Admin`, or `Owner` (case-insensitive). The value is normalized to the canonical casing before being stored. Returns `400` if the name is invalid or already taken.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional free-text description of the role's purpose or permissions. Stored as-is with no length enforcement.
+</ParamField>
+
+### Response
+
+**`201 Created`**
+
+<ResponseField name="message" type="string">
+  Confirmation: `"Rol creado correctamente"`.
+</ResponseField>
+
+<ResponseField name="role" type="object">
+  The newly created role object, including `roleId`, `name`, and `description`.
+</ResponseField>
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | `name` is missing, blank, or not one of the three accepted values |
+| `400`  | A role with the same normalized name already exists |
+| `401`  | Missing or invalid `token` cookie |
+| `403`  | Authenticated user does not have the `Owner` role |
+| `500`  | Internal server error |
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://your-api.com/api/roles \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "name": "Admin",
+    "description": "Store-level administrator with full POS access"
+  }'
+```
+
+```json Response (201)
+{
+  "message": "Rol creado correctamente",
+  "role": {
+    "roleId": "11111111-aaaa-4000-8000-aaaaaaaaaaaa",
+    "name": "Admin",
+    "description": "Store-level administrator with full POS access"
+  }
+}
+```
+
+</CodeGroup>
+
+---
+
+## POST /api/roles/associate-user
+
+Assigns an existing role to an existing user by inserting a row into the `cd.users_roles` junction table. If the user already holds the specified role, the request is rejected. A user can hold multiple roles simultaneously.
+
+**Authentication:** ✅ Required — `Owner` role
+
+### Request Body
+
+<ParamField body="userId" type="string (UUID)" required>
+  UUID of the user (`users.user_id`) to assign the role to. Returns `404` if no matching user exists.
+</ParamField>
+
+<ParamField body="roleId" type="string (UUID)" required>
+  UUID of the role (`roles.role_id`) to assign. Returns `404` if no matching role exists.
+</ParamField>
+
+### Response
+
+**`201 Created`**
+
+<ResponseField name="message" type="string">
+  Confirmation: `"Rol asociado al usuario correctamente"`.
+</ResponseField>
+
+<ResponseField name="userId" type="string (UUID)">
+  The UUID of the user the role was assigned to.
+</ResponseField>
+
+<ResponseField name="role" type="object">
+  The full role object that was associated (`roleId`, `name`, `description`).
+</ResponseField>
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | `userId` or `roleId` is missing or blank |
+| `400`  | The user already has the specified role assigned |
+| `401`  | Missing or invalid `token` cookie |
+| `403`  | Authenticated user does not have the `Owner` role |
+| `404`  | No user found for the given `userId` |
+| `404`  | No role found for the given `roleId` |
+| `500`  | Internal server error |
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://your-api.com/api/roles/associate-user \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "userId": "a1b2c3d4-0000-4000-8000-111111111111",
+    "roleId": "11111111-aaaa-4000-8000-aaaaaaaaaaaa"
+  }'
+```
+
+```json Response (201)
+{
+  "message": "Rol asociado al usuario correctamente",
+  "userId": "a1b2c3d4-0000-4000-8000-111111111111",
+  "role": {
+    "roleId": "11111111-aaaa-4000-8000-aaaaaaaaaaaa",
+    "name": "Admin",
+    "description": "Store-level administrator with full POS access"
+  }
+}
+```
+
+</CodeGroup>
+
+---
+
+## PUT /api/roles/:id
+
+Updates the `name` and/or `description` of an existing role. Both fields are optional — only the fields present in the request body are updated. If `name` is provided, it must pass the same validation as `POST /api/roles` (must be a valid role name, and must not already be taken by a different role).
+
+**Authentication:** ✅ Required — `Owner` role
+
+### Path Parameters
+
+<ParamField path="id" type="string (UUID)" required>
+  The `roleId` of the role to update.
+</ParamField>
+
+### Request Body
+
+<ParamField body="name" type="string">
+  New role name. Must be one of `Employee`, `Admin`, or `Owner` (case-insensitive). Returns `400` if the name is invalid or already used by another role.
+</ParamField>
+
+<ParamField body="description" type="string">
+  New description for the role. Can be set to an empty string to clear it.
+</ParamField>
+
+### Response
+
+**`200 OK`**
+
+<ResponseField name="message" type="string">
+  Confirmation: `"Rol actualizado correctamente"`.
+</ResponseField>
+
+<ResponseField name="role" type="object">
+  The updated role object reflecting the new values.
+</ResponseField>
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | `name` is provided but is not a valid role name |
+| `400`  | `name` is provided but is already used by a different role |
+| `401`  | Missing or invalid `token` cookie |
+| `403`  | Authenticated user does not have the `Owner` role |
+| `404`  | No role found for the given UUID |
+| `500`  | Internal server error |
+
+```bash cURL Example
+curl -X PUT https://your-api.com/api/roles/11111111-aaaa-4000-8000-aaaaaaaaaaaa \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "description": "Administrator with access to all store reports and user management"
+  }'
+```
+
+---
+
+## DELETE /api/roles/:id
+
+Permanently removes a role from the database. This is a **hard delete** — the row is destroyed via Sequelize's `destroy()` with no soft-delete fallback (`paranoid` is not enabled on the `roles` model). Any `users_roles` rows referencing this role will also be removed due to the `ON DELETE CASCADE` constraint defined on the junction table.
+
+**Authentication:** ✅ Required — `Owner` role
+
+<Warning>
+  This action is irreversible. Once a role is deleted, all user-role associations for that role are also permanently removed via the `ON DELETE CASCADE` on `cd.users_roles`. Users who held only this role will have no roles until a new one is assigned. Verify the role is safe to remove before calling this endpoint.
+</Warning>
+
+### Path Parameters
+
+<ParamField path="id" type="string (UUID)" required>
+  The `roleId` of the role to permanently delete.
+</ParamField>
+
+### Response
+
+**`200 OK`**
+
+```json
+{ "message": "Rol eliminado correctamente" }
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `401`  | Missing or invalid `token` cookie |
+| `403`  | Authenticated user does not have the `Owner` role |
+| `404`  | No role found for the given UUID |
+| `500`  | Internal server error |
+
+```bash cURL Example
+curl -X DELETE https://your-api.com/api/roles/11111111-aaaa-4000-8000-aaaaaaaaaaaa \
+  -b cookies.txt
+```

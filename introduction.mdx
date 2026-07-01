@@ -1,0 +1,77 @@
+---
+title: "Credith: Point-of-Sale & Credit Management for Retailers"
+sidebarTitle: "Introduction"
+description: "Credith is a full-stack POS and credit platform with CAI-compliant invoicing, installment payment plans, multi-store inventory, and role-based dashboards."
+---
+
+Credith is a full-stack point-of-sale and credit management platform built specifically for Honduran retail businesses. It combines CAI-compliant tax invoicing (as required by Honduras's Servicio de Administración de Rentas), flexible installment-based credit plans, real-time multi-store inventory tracking, and rich financial reporting — all in a single integrated system. Whether you operate one storefront or a network of branches, Credith gives owners, administrators, and cashiers exactly the tools they need in a role-appropriate dashboard.
+
+## Key Pillars
+
+<CardGroup cols={2}>
+  <Card title="CAI-Compliant Invoicing" icon="file-invoice">
+    Issue government-authorized invoices that track CAI numbers, authorized ranges, limit dates, ISV tax breakdowns, discounts, and cashier identity — keeping your business fully compliant with Honduran fiscal regulations.
+  </Card>
+  <Card title="Credit & Payment Plans" icon="credit-card">
+    Offer customers CASH or INSTALLMENT payment options at checkout. Installment plans track monthly deadlines, interest rates, paid amounts, and status (PENDING, OVERDUE, PAYED), with support for mid-plan recalculation.
+  </Card>
+  <Card title="Multi-Store Inventory" icon="warehouse">
+    Manage products across multiple stores with per-store stock counts. Inventory is automatically decremented on each sale, and per-store or per-company product performance reports are always available.
+  </Card>
+  <Card title="Reporting & Analytics" icon="chart-bar">
+    Query gross and net gain by product, store, or company — filtered by month and year. Store reports surface employee counts and operational status; company reports aggregate revenue across all active branches.
+  </Card>
+</CardGroup>
+
+## System Architecture
+
+Credith is composed of three tiers that work together seamlessly:
+
+- **React Frontend (Vite)** — A single-page application built with React 19, React Router v7, Recharts for data visualization, and React Toastify for notifications. The frontend is compiled at build time with `VITE_BASE_ROUTE` pointing to the API, and it serves the final static bundle via `vite preview` on port `4173`.
+
+- **Express API (Node.js)** — A REST API built on Express 5, secured with JWT authentication and bcrypt password hashing. It exposes routes under `/api` for every resource in the system and integrates Swagger UI for interactive API exploration in development mode. The service runs on port `3000`.
+
+- **PostgreSQL (via Sequelize)** — All data is persisted in a PostgreSQL 17 database. Sequelize ORM manages migrations, seeders, and model definitions. All tables live inside the `cd` schema and use UUID primary keys with soft-delete support (`deleted_at`).
+
+```
+┌─────────────────────┐      HTTP/JSON      ┌──────────────────────┐
+│  React SPA (Vite)   │ ──────────────────► │  Express REST API    │
+│  Port 4173          │                     │  Port 3000           │
+└─────────────────────┘                     └──────────┬───────────┘
+                                                       │  Sequelize ORM
+                                            ┌──────────▼───────────┐
+                                            │  PostgreSQL 17        │
+                                            │  Schema: cd          │
+                                            └──────────────────────┘
+```
+
+## User Roles
+
+Credith enforces a three-tier role system. Every user is assigned exactly one role which determines both their access level in the API and the dashboard view they see in the frontend.
+
+| Role | Description | Capabilities |
+|------|-------------|--------------|
+| **OWNER** | Company-level administrator | Full access to all stores, users, companies, products, reports, CAI management, and billing configuration. Sees the complete `Home` dashboard with analytics and management panels. |
+| **ADMIN** | Store administrator | Manages store operations including inventory, checkout machines, clients, payment plans, and store-level reporting. Sees the `Home` dashboard scoped to their store. |
+| **EMPLOYEE** | Cashier / floor staff | Operates the point-of-sale terminal — creates invoices, processes payments, and looks up client credit plans. Sees the `InicioPage` (POS view) optimized for checkout workflows. |
+
+Role assignment is done via `POST /api/roles/associate-user`, and users can hold one active role at a time through the `users_roles` join table.
+
+## Feature Highlights
+
+- **CAI & Range Management** — Register government-issued CAI codes with expiration dates and number ranges. The system auto-increments invoice numbers and validates that each new bill falls within the active range.
+- **Flexible Invoicing** — Bills capture full fiscal headers: company name/RTN/email/address, cashier identity, checkout machine number, ISV 15%/18% tax amounts, discount percentages, exonerated and exempt subtotals.
+- **Installment Credit** — Customers can purchase on credit with configurable monthly payment schedules, interest rates, and specific payment-due days. Plans can be recalculated mid-term.
+- **Overdue Tracking** — The `GET /api/payment-plan/pending-payments` endpoint surfaces all overdue and upcoming installments, making collections easy for store admins.
+- **Multi-Company Support** — A single Credith instance can manage multiple independent companies, each with their own stores, users, CAIs, and reporting.
+- **Product Categories** — Products are organized via a many-to-many categories system and can be soft-deleted and recovered without losing historical billing data.
+- **Cloudinary Image Uploads** — Product images can be hosted on Cloudinary; the `VITE_CLOUDINARY_CLOUD_NAME` and `VITE_CLOUDINARY_UPLOAD_PRESET` build arguments wire the frontend upload widget to your Cloudinary account.
+- **Swagger UI** — A fully interactive API reference is available at `http://localhost:3000/api-docs` when the service runs in `NODE_ENV=development`, generated automatically from JSDoc annotations on every route.
+
+## What's Next
+
+Ready to get a local instance running in under five minutes?
+
+<Card title="Quickstart" icon="rocket" href="/quickstart">
+  Clone the repo, start Docker Compose, run migrations, seed demo data, and make your first API call.
+</Card>

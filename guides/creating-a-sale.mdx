@@ -1,0 +1,214 @@
+---
+title: "Create an Invoice and Record a Sale"
+sidebarTitle: "Creating a Sale"
+description: "Walk through Credith's bill creation flow: configure a CAI range, set up a checkout machine, select products, choose payment type, and POST to /api/bills."
+---
+
+In Credith, every sale is recorded as a **factura** (bill) generated through a single transactional `POST /api/bills` request. The server validates the cashier, the active CAI (government-authorized invoice number), store inventory, and — for installment sales — the client's existing payment plan, all inside a single database transaction. A successful call creates the bill record, one or more `bill_details` line items, deducts inventory from `stores_inventories`, increments the CAI range counter, and creates a `bill_payment_plan` with individual `monthly_payments` if the sale is on credit.
+
+## Prerequisites and Sale Flow
+
+<Steps>
+  <Step title="Ensure an active CAI with a valid range exists">
+    Each store must have exactly one active CAI (`isActive = true` in `cd.cais`) with an active `cai_range` whose `currentNumber` has not yet reached `maxRange`. The bill controller derives the `billNumberFinal` string from the store number, machine number, CAI document type, and the next sequential bill number:
+
+    ```
+    {storeNumber(3)}-{machineNumber(3)}-{documentType}-{billNumber(8)}
+    e.g. 001-001-01-00000001
+    ```
+
+    If the range is exhausted the server returns `406 El rango de CAI se ha agotado`.
+  </Step>
+
+  <Step title="Ensure the cashier user is associated with a checkout machine">
+    The `userId` in the request body must belong to a user with a `checkoutMachineId` set. Without an assigned checkout machine the server returns `404 Usuario no tiene asignado una caja de facturacion`. The machine's `machineNumber` is stamped directly on the bill record for audit purposes.
+  </Step>
+
+  <Step title="Ensure products are in stock in the store's inventory">
+    Every item in `details` must appear in `cd.stores_inventories` for the given `storeId` with `inStock >= quantity`. The server checks each line item and throws `406` if stock is insufficient. A successful transaction deducts the sold quantity from `inStock` atomically.
+  </Step>
+
+  <Step title="Identify or create the client (for installment sales)">
+    For `paymentType: "INSTALLMENT"` the `customer.clientId` field is required and must reference a record in `cd.clients`. The controller checks whether the client already has an active payment plan (`status` of `PENDING` or `OVERDUE`) — if so it returns `400 El cliente ya tiene un plan de pago activo`. For cash sales, `customer` only needs a `customerName` string; no `clientId` is required.
+  </Step>
+
+  <Step title="POST to /api/bills with the full payload">
+    Compose the request body as described below and send it to `POST /api/bills`. The endpoint is open (no auth cookie required at the API level) — the cashier identity is established through `userId` in the body.
+  </Step>
+</Steps>
+
+## Request Body Reference
+
+```json
+{
+  "userId": "c98765e5-9ae8-4597-b95e-9889028f2222",
+  "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+  "limitDate": "2025-12-31",
+  "paymentType": "CASH",
+  "discountPercentage": 0,
+  "discountAmount": 0,
+  "exonerated": 0,
+  "exempt": 0,
+  "details": [
+    {
+      "productId": "e11111e5-9ae8-4597-b95e-9889028f4444",
+      "productName": "Televisor 42\"",
+      "quantity": 2,
+      "sellPrice": 150.00,
+      "discountPercentage": 0,
+      "discountAmount": 0,
+      "total": 300.00
+    }
+  ],
+  "customer": {
+    "customerName": "Juan Pérez",
+    "customerPhone": "9999-9999",
+    "customerAddress": "Tegucigalpa, Honduras"
+  },
+  "paymentData": {
+    "payment": 345.00,
+    "interestRate": 0
+  }
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `userId` | UUID | ✅ | Must match a user with an assigned checkout machine and store |
+| `storeId` | UUID | ✅ | Must match the user's own `store_id`; server validates this |
+| `limitDate` | date string | ✅ | Invoice due date (`YYYY-MM-DD`) |
+| `paymentType` | `"CASH"` \| `"INSTALLMENT"` | ✅ | Determines which payment plan is created |
+| `discountPercentage` | integer | — | Bill-level discount percentage |
+| `discountAmount` | number | — | Bill-level discount amount (Lempiras) |
+| `exonerated` | number | — | Exonerated tax amount |
+| `exempt` | number | — | Exempt amount |
+| `details` | array | ✅ | At least one item required |
+| `details[].productId` | UUID | ✅ | Must be a valid UUID |
+| `details[].productName` | string | ✅ | Informational; stamped on validation errors |
+| `details[].quantity` | integer | ✅ | Units to sell; subtracted from `inStock` |
+| `details[].sellPrice` | number | ✅ | Price per unit at time of sale |
+| `details[].discountPercentage` | number | — | Line-item discount percentage |
+| `details[].discountAmount` | number | — | Line-item discount amount |
+| `details[].total` | number | ✅ | Must equal `quantity × sellPrice × (1 - discountPercentage/100)` |
+| `customer.customerName` | string | ✅ | Printed on the bill |
+| `customer.customerPhone` | string | — | Printed on the bill |
+| `customer.customerAddress` | string | — | Printed on the bill |
+| `customer.clientId` | UUID | ✅ (INSTALLMENT only) | Links the payment plan to a client record |
+| `paymentData.payment` | number | — | Initial payment or down payment amount |
+| `paymentData.startingDate` | date string | ✅ (INSTALLMENT) | First installment reference date |
+| `paymentData.monthsToPay` | integer | ✅ (INSTALLMENT) | Number of monthly installments |
+| `paymentData.paymentDay` | integer | ✅ (INSTALLMENT) | Day of month each installment falls due |
+| `paymentData.interestRate` | number | — | Monthly interest rate (default `0`) |
+
+<Note>
+  ISV (Honduran sales tax) at 15% is automatically computed by the server as `discountedSubtotal × 0.15` and stored in `isv15Amount`. The final `total` the client is charged equals `discountedSubtotal + isv15Amount`. You do not need to pre-calculate tax in your request.
+</Note>
+
+## Example: CASH Sale
+
+```bash
+curl -X POST http://localhost:3000/api/bills \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "c98765e5-9ae8-4597-b95e-9889028f2222",
+    "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+    "limitDate": "2025-12-31",
+    "paymentType": "CASH",
+    "discountPercentage": 0,
+    "discountAmount": 0,
+    "exonerated": 0,
+    "exempt": 0,
+    "details": [
+      {
+        "productId": "e11111e5-9ae8-4597-b95e-9889028f4444",
+        "productName": "Televisor 42\"",
+        "quantity": 1,
+        "sellPrice": 8500.00,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "total": 8500.00
+      }
+    ],
+    "customer": {
+      "customerName": "Ana López",
+      "customerPhone": "8888-1234",
+      "customerAddress": "San Pedro Sula, Cortés"
+    },
+    "paymentData": {
+      "payment": 9775.00,
+      "interestRate": 0
+    }
+  }'
+```
+
+A successful `201` response returns the full bill object including `billId`, `billNumberFinal`, `total`, `isv15Amount`, and the embedded `plan` payment record.
+
+## Example: INSTALLMENT Sale
+
+```bash
+curl -X POST http://localhost:3000/api/bills \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "c98765e5-9ae8-4597-b95e-9889028f2222",
+    "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+    "limitDate": "2026-06-30",
+    "paymentType": "INSTALLMENT",
+    "discountPercentage": 0,
+    "discountAmount": 0,
+    "exonerated": 0,
+    "exempt": 0,
+    "details": [
+      {
+        "productId": "e11111e5-9ae8-4597-b95e-9889028f4444",
+        "productName": "Refrigeradora 14 pies",
+        "quantity": 1,
+        "sellPrice": 20000.00,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "total": 20000.00
+      }
+    ],
+    "customer": {
+      "customerName": "Carlos Mejía",
+      "customerPhone": "9999-5678",
+      "customerAddress": "Tegucigalpa, Francisco Morazán",
+      "clientId": "f22222e5-9ae8-4597-b95e-9889028f5555"
+    },
+    "paymentData": {
+      "payment": 3000.00,
+      "startingDate": "2025-07-01",
+      "monthsToPay": 6,
+      "paymentDay": 15,
+      "interestRate": 0
+    }
+  }'
+```
+
+The server computes the `totalToPay` (bill total after taxes, minus the down payment `payment`), creates a `bill_payment_plans` record with `status: "PENDING"`, and bulk-inserts 6 `monthly_payments` rows — one per month starting from `startingDate`, each due on day `15`. The last installment absorbs any rounding difference.
+
+<Warning>
+  A client can only have **one active payment plan** at a time. If `customer.clientId` already has a plan with `status` of `PENDING` or `OVERDUE`, the entire bill creation is rolled back and the server returns `400 El cliente ya tiene un plan de pago activo`. Resolve the existing plan (pay it off or recalculate it via `POST /api/payment-plan/:planId/pay`) before opening a new installment sale for the same client.
+</Warning>
+
+## What Happens Inside the Transaction
+
+Every `POST /api/bills` call runs inside a single Sequelize managed transaction, which means all of the following succeed or none of them persist:
+
+<CardGroup cols={2}>
+  <Card title="Bill record created" icon="file-invoice">
+    A `cd.bills` row is inserted with the denormalized company, cashier, and customer data snapshotted at sale time.
+  </Card>
+  <Card title="Inventory deducted" icon="boxes-stacked">
+    Each `cd.stores_inventories` row for the sold products has its `inStock` column decremented by the sold quantity.
+  </Card>
+  <Card title="CAI counter incremented" icon="hashtag">
+    The active `cai_range.currentNumber` is incremented under a row-level `LOCK.UPDATE` to prevent duplicate bill numbers under concurrent load.
+  </Card>
+  <Card title="Payment plan created" icon="calendar-check">
+    A `bill_payment_plans` row is created (CASH = immediately `PAYED`, INSTALLMENT = `PENDING`) along with individual `monthly_payments` rows.
+  </Card>
+</CardGroup>
+
+<Tip>
+  For the full parameter reference, response schema, and error codes for `POST /api/bills`, see the [Bills API reference](/api-reference/bills).
+</Tip>

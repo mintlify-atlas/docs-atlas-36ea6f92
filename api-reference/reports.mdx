@@ -1,0 +1,383 @@
+---
+title: "Reports API — Sales, Store, and Company Analytics"
+sidebarTitle: "Reports"
+description: "Query product performance, store monthly revenue, and company-level aggregated financials. All report endpoints accept company and store filters."
+---
+
+Credith exposes three analytical report endpoints that cover different scopes of the business: product-level performance across a company, monthly revenue and staffing data for a single store, and aggregated financials rolled up to the company level. All three operate against the `cd` schema using raw PostgreSQL queries with CTEs, and all return pre-computed `grossGain` and `netGain` figures calculated from `sell_price - buy_price` margins. A fourth endpoint, `GET /api/reports/stores/range`, returns day-by-day gross/net gain for a store over an arbitrary date range.
+
+<Note>
+  In the Credith frontend, all four report endpoints are restricted to users holding the `OWNER` role (or `ADMIN` for store-scoped views). The API-level `roleMiddleware` enforces this — requests from `EMPLOYEE`-role users are rejected with `403`. Ensure the JWT in the `Authorization` header belongs to a user with the appropriate role.
+</Note>
+
+<Info>
+  The **DashboardHomePage** in the Credith frontend aggregates the last 6 months of data by calling `GET /api/reports/stores/range` (with `startDate` = 6 months ago and `endDate` = today) alongside `GET /api/reports/companies` for the current month. These two calls together populate the line chart and KPI cards shown on login.
+</Info>
+
+---
+
+## `GET /api/reports/products`
+
+Returns product performance data for a company, broken down by product and store. For each product the response includes total quantity sold, current in-stock units, gross gain (sell price margin × qty), and net gain (line total margin × qty) — both for the company as a whole and per individual store.
+
+When no `month`/`year` is provided the report covers all historical sales. When a period is specified, only bills created within that calendar month are included.
+
+**Query parameters**
+
+<ParamField query="companyId" type="string (UUID)" required>
+  Limits the report to products sold by or stocked in stores belonging to this company.
+</ParamField>
+
+<ParamField query="storeId" type="string (UUID)">
+  Optional. Narrows both the sales and inventory queries to a single store within the company.
+</ParamField>
+
+<ParamField query="month" type="string | integer">
+  Optional. Accepts either a numeric month (`1`–`12`) alongside `year`, or a combined `YYYY-MM` string (e.g. `"2026-05"`). When omitted together with `year`, the report covers all historical data.
+</ParamField>
+
+<ParamField query="year" type="integer">
+  The four-digit calendar year. Required when `month` is sent as a plain integer.
+</ParamField>
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of products to return per page. Capped at `100`.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of products to skip (for pagination).
+</ParamField>
+
+**Example**
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://your-domain.com/api/reports/products?companyId=cc001122-9ae8-4597-b95e-9889028f0001&month=2026-05&limit=10&offset=0" \
+  -H "Authorization: Bearer <token>"
+```
+
+```json Response 200
+{
+  "period": {
+    "type": "month",
+    "year": 2026,
+    "month": 5,
+    "startDate": "2026-05-01",
+    "endDate": "2026-06-01"
+  },
+  "filters": {
+    "companyId": "cc001122-9ae8-4597-b95e-9889028f0001",
+    "storeId": null
+  },
+  "pagination": {
+    "limit": 10,
+    "offset": 0
+  },
+  "products": [
+    {
+      "productId": "e11111e5-9ae8-4597-b95e-9889028f4444",
+      "name": "Laptop HP 15",
+      "quantitySold": 8,
+      "inStock": 12,
+      "grossGain": 2400.00,
+      "netGain": 2280.00,
+      "stores": [
+        {
+          "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+          "address": "101",
+          "quantitySold": 5,
+          "inStock": 7,
+          "grossGain": 1500.00,
+          "netGain": 1425.00
+        }
+      ]
+    }
+  ]
+}
+```
+</CodeGroup>
+
+**Response fields**
+
+<ResponseField name="period" type="object">
+  Describes the date range applied to the query.
+
+  <Expandable title="period fields">
+    <ResponseField name="period.type" type="string">
+      `"historical"` when no date filter was applied; `"month"` when a specific month was requested.
+    </ResponseField>
+    <ResponseField name="period.year" type="integer">
+      Calendar year (only present when `type = "month"`).
+    </ResponseField>
+    <ResponseField name="period.month" type="integer">
+      Calendar month 1–12 (only present when `type = "month"`).
+    </ResponseField>
+    <ResponseField name="period.startDate" type="string (date)">
+      Inclusive start of the period window.
+    </ResponseField>
+    <ResponseField name="period.endDate" type="string (date)">
+      Exclusive end of the period window.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="products" type="array">
+  Paginated list of product performance objects.
+
+  <Expandable title="product fields">
+    <ResponseField name="productId" type="string (UUID)">UUID of the product.</ResponseField>
+    <ResponseField name="name" type="string">Product name, ordered alphabetically.</ResponseField>
+    <ResponseField name="quantitySold" type="integer">Total units sold across all matching stores in the period.</ResponseField>
+    <ResponseField name="inStock" type="integer">Total units currently in stock across all matching stores.</ResponseField>
+    <ResponseField name="grossGain" type="number">
+      Company-level gross gain: `SUM((sellPrice - buyPrice) × quantity)`.
+    </ResponseField>
+    <ResponseField name="netGain" type="number">
+      Company-level net gain: `SUM(lineTotal - buyPrice × quantity)`.
+    </ResponseField>
+    <ResponseField name="stores" type="array">
+      Per-store breakdown. Each entry has `storeId`, `address`, `quantitySold`, `inStock`, `grossGain`, and `netGain` for this product in that store.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | `companyId` missing, invalid `month`/`year` combination |
+
+---
+
+## `GET /api/reports/stores`
+
+Returns the monthly revenue summary and employee roster for a single store. If no `month`/`year` is specified, the **current calendar month** is used by default. Requires `ADMIN` or `OWNER` role.
+
+**Query parameters**
+
+<ParamField query="storeId" type="string (UUID)" required>
+  UUID of the store to report on.
+</ParamField>
+
+<ParamField query="month" type="string | integer">
+  Optional. Numeric month (`1`–`12`) with `year`, or `YYYY-MM` string. Defaults to the current month.
+</ParamField>
+
+<ParamField query="year" type="integer">
+  Required when `month` is a plain integer.
+</ParamField>
+
+**Example**
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://your-domain.com/api/reports/stores?storeId=d55555e5-9ae8-4597-b95e-9889028f3333" \
+  -H "Authorization: Bearer <token>"
+```
+
+```json Response 200
+{
+  "period": {
+    "type": "month",
+    "year": 2026,
+    "month": 5,
+    "startDate": "2026-05-01",
+    "endDate": "2026-06-01"
+  },
+  "filters": {
+    "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333"
+  },
+  "store": {
+    "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+    "address": "101",
+    "isOperating": true,
+    "monthlyGrossGain": 8400.00,
+    "monthlyNetGain": 7980.00,
+    "employees": [
+      {
+        "userId": "c98765e5-9ae8-4597-b95e-9889028f2222",
+        "fullName": "Carlos Flores Martínez",
+        "email": "carlos@credith.hn",
+        "isActive": true
+      }
+    ]
+  }
+}
+```
+</CodeGroup>
+
+**Response fields**
+
+<ResponseField name="store" type="object">
+  Monthly performance snapshot for the requested store.
+
+  <Expandable title="store fields">
+    <ResponseField name="storeId" type="string (UUID)">UUID of the store.</ResponseField>
+    <ResponseField name="address" type="string">Store address / store number.</ResponseField>
+    <ResponseField name="isOperating" type="boolean">Whether `is_active` is `true` for this store.</ResponseField>
+    <ResponseField name="monthlyGrossGain" type="number">
+      Gross gain for the period: `SUM((sellPrice - buyPrice) × quantity)`.
+    </ResponseField>
+    <ResponseField name="monthlyNetGain" type="number">
+      Net gain for the period: `SUM(lineTotal - buyPrice × quantity)`.
+    </ResponseField>
+    <ResponseField name="employees" type="array">
+      All users assigned to this store (not scoped to the period).
+      <Expandable title="employee fields">
+        <ResponseField name="userId" type="string (UUID)">Employee UUID.</ResponseField>
+        <ResponseField name="fullName" type="string">Concatenated first and last names.</ResponseField>
+        <ResponseField name="email" type="string">Employee email address.</ResponseField>
+        <ResponseField name="isActive" type="boolean">Whether the employee account is active.</ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | `storeId` missing or invalid date parameters |
+| `404` | No store found for the given `storeId` |
+
+---
+
+## `GET /api/reports/stores/range`
+
+Returns a day-by-day series of gross and net gain for a store between two calendar dates. Each entry in `data` corresponds to a single calendar day; days with no sales return `grossGain: 0, netGain: 0`. Requires `ADMIN` or `OWNER` role.
+
+**Query parameters**
+
+<ParamField query="storeId" type="string (UUID)" required>
+  UUID of the store.
+</ParamField>
+
+<ParamField query="startDate" type="string (date)" required>
+  Inclusive start date in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField query="endDate" type="string (date)" required>
+  Inclusive end date in `YYYY-MM-DD` format.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "data": [
+    { "date": "2026-05-01", "grossGain": 1200.00, "netGain": 1140.00 },
+    { "date": "2026-05-02", "grossGain": 0, "netGain": 0 },
+    { "date": "2026-05-03", "grossGain": 3450.00, "netGain": 3277.50 }
+  ]
+}
+```
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | `storeId`, `startDate`, or `endDate` missing; dates not in `YYYY-MM-DD` format |
+
+---
+
+## `GET /api/reports/companies`
+
+Returns aggregated monthly revenue for every **active** store within a company. Defaults to the current calendar month if no period is specified. Requires `OWNER` role.
+
+**Query parameters**
+
+<ParamField query="companyId" type="string (UUID)" required>
+  UUID of the company to report on.
+</ParamField>
+
+<ParamField query="month" type="string | integer">
+  Optional. Numeric month (`1`–`12`) with `year`, or `YYYY-MM` string. Defaults to the current month.
+</ParamField>
+
+<ParamField query="year" type="integer">
+  Required when `month` is a plain integer.
+</ParamField>
+
+**Example**
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://your-domain.com/api/reports/companies?companyId=cc001122-9ae8-4597-b95e-9889028f0001" \
+  -H "Authorization: Bearer <token>"
+```
+
+```json Response 200
+{
+  "period": {
+    "type": "month",
+    "year": 2026,
+    "month": 5,
+    "startDate": "2026-05-01",
+    "endDate": "2026-06-01"
+  },
+  "filters": {
+    "companyId": "cc001122-9ae8-4597-b95e-9889028f0001"
+  },
+  "company": {
+    "companyId": "cc001122-9ae8-4597-b95e-9889028f0001",
+    "name": "Credith HN",
+    "rtn": "08011999000001",
+    "email": "admin@credith.hn",
+    "totalMonthlyGrossGain": 24600.00,
+    "totalMonthlyNetGain": 23370.00,
+    "stores": [
+      {
+        "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+        "address": "101",
+        "isOperating": true,
+        "monthlyGrossGain": 8400.00,
+        "monthlyNetGain": 7980.00
+      },
+      {
+        "storeId": "d66666e6-9ae8-4597-b95e-9889028f4444",
+        "address": "202",
+        "isOperating": true,
+        "monthlyGrossGain": 16200.00,
+        "monthlyNetGain": 15390.00
+      }
+    ]
+  }
+}
+```
+</CodeGroup>
+
+**Response fields**
+
+<ResponseField name="company" type="object">
+  Aggregated company report.
+
+  <Expandable title="company fields">
+    <ResponseField name="companyId" type="string (UUID)">UUID of the company.</ResponseField>
+    <ResponseField name="name" type="string">Company name.</ResponseField>
+    <ResponseField name="rtn" type="string">Company tax ID (RTN).</ResponseField>
+    <ResponseField name="email" type="string">Company contact email.</ResponseField>
+    <ResponseField name="totalMonthlyGrossGain" type="number">
+      Sum of `monthlyGrossGain` across all active stores.
+    </ResponseField>
+    <ResponseField name="totalMonthlyNetGain" type="number">
+      Sum of `monthlyNetGain` across all active stores.
+    </ResponseField>
+    <ResponseField name="stores" type="array">
+      Per-store breakdown. Only stores where `is_active = true` are included.
+      <Expandable title="store summary fields">
+        <ResponseField name="storeId" type="string (UUID)">UUID of the store.</ResponseField>
+        <ResponseField name="address" type="string">Store address / number.</ResponseField>
+        <ResponseField name="isOperating" type="boolean">Always `true` for this endpoint (only active stores are included).</ResponseField>
+        <ResponseField name="monthlyGrossGain" type="number">Store's gross gain for the period.</ResponseField>
+        <ResponseField name="monthlyNetGain" type="number">Store's net gain for the period.</ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | `companyId` missing or invalid date parameters |
+| `404` | No company found for the given `companyId` |

@@ -1,0 +1,187 @@
+---
+title: "CAI-Compliant Tax Invoicing in Credith"
+sidebarTitle: "CAI Invoicing"
+description: "CAI (Código de Autorización de Impresión) is Honduras's government-issued invoice authorization system. Credith validates every sale against active CAI ranges."
+---
+
+In Honduras, every business that issues fiscal invoices must obtain a **CAI** (Código de Autorización de Impresión) from the Servicio de Administración de Rentas (SAR). The CAI is a government-issued authorization code that defines the range of invoice numbers a business is permitted to print and the date by which those invoices must be issued. Credith builds CAI compliance directly into the bill creation flow — a sale cannot be posted without a valid, active CAI Range attached to the store, and every generated invoice number is traceable back to the authorizing CAI.
+
+## Two-Level Structure: CAI → CAI Range → Bill
+
+<Info>
+**Authorization flow:**
+
+`CAI` (government authorization code + expiry)
+  → one or more `CAI Ranges` (min/max bill number sequences)
+    → `Bills` (each stamped with a CAI Range ID and an incrementing number)
+
+A bill's final printed number follows the format:
+`{store_number}-{machine_number}-{document_type}-{bill_number}`
+e.g. `001-001-01-00000042`
+</Info>
+
+### The `cais` Table
+
+Each **CAI** record represents a single government authorization issued to a store.
+
+| Field | Type | Description |
+|---|---|---|
+| `cai_id` | UUID | Primary key |
+| `government_id` | STRING(75) | The official CAI code issued by SAR. Must be unique across the system. |
+| `expiration_date` | DATE | The date after which the CAI is no longer valid for new invoices. Must be in the future at creation time. |
+| `document_type` | STRING(10) | Invoice document type code, defaults to `'01'`. Used in the formatted bill number. |
+| `is_active` | BOOLEAN | Whether this CAI is currently active for the store. Only one CAI can be active per store. |
+| `store_id` | UUID | FK → `stores.store_id`. The store this CAI belongs to. |
+
+```js
+// From Service/models/entities/cai.js
+Cai.init({
+  caiId:          { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
+  governmentId:   { type: DataTypes.STRING(75), allowNull: false },
+  expirationDate: { type: DataTypes.DATE, allowNull: false },
+  documentType:   { type: DataTypes.STRING(10), allowNull: false, defaultValue: '01' },
+  isActive:       { type: DataTypes.BOOLEAN, defaultValue: true }
+}, { schema: 'cd', paranoid: true, underscored: true })
+```
+
+### The `cai_ranges` Table
+
+Each **CAI Range** defines a contiguous sequence of bill numbers authorized under a specific CAI.
+
+| Field | Type | Description |
+|---|---|---|
+| `cai_range_id` | UUID | Primary key |
+| `min_range` | INTEGER | The first bill number in this authorized sequence. |
+| `max_range` | INTEGER | The last bill number in this authorized sequence. |
+| `current_number` | INTEGER | Offset from `min_range` — how many bills have already been issued. Starts at `0`. |
+| `expiration_date` | DATE | Independent expiry date for this range (from the `schema.md` table definition). |
+| `is_active` | BOOLEAN | Whether this range is the active one for its CAI. Only one range can be active per CAI. |
+| `cai_id` | UUID | FK → `cais.cai_id`. |
+
+```js
+// From Service/models/entities/caiRange.js
+CaiRange.init({
+  caiRangeId:    { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
+  minRange:      { type: DataTypes.INTEGER, allowNull: false },
+  maxRange:      { type: DataTypes.INTEGER, allowNull: false },
+  currentNumber: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  isActive:      { type: DataTypes.BOOLEAN, defaultValue: true }
+}, { schema: 'cd', paranoid: true, underscored: true })
+```
+
+## Single Active CAI Enforcement
+
+Only **one CAI** can be active per store at any given time. When a new CAI is created, the system deactivates all previously active CAIs for that store inside a database transaction:
+
+```js
+// From Service/controllers/cai.js — createCai()
+await db.sequelize.transaction(async (transaction) => {
+  // Deactivate any currently active CAI for this store
+  await Cais.update(
+    { isActive: false },
+    { where: { storeId, isActive: true }, transaction }
+  )
+
+  // Create the new CAI with its initial range
+  return await Cais.create(
+    { governmentId, storeId, expirationDate, documentType, isActive: true,
+      caiRanges: [{ minRange: parsedMin, maxRange: parsedMax, currentNumber: 0, isActive: true }] },
+    { include: [{ model: CaiRanges, as: 'caiRanges' }], transaction }
+  )
+})
+```
+
+If a store already has an active CAI and a new one is submitted **without** the `isRenewal: true` flag, the API returns `409 Conflict`:
+
+```
+"Esta tienda ya tiene un CAI activo. Use la opción Renovar."
+```
+
+Similarly, only **one CAI Range** can be active per CAI. Adding a new range via `POST /api/cai-ranges` automatically deactivates the previous active range for that CAI.
+
+## Atomic Bill Number Increment
+
+During bill creation (`POST /api/bills`), the system acquires a `SELECT ... FOR UPDATE` lock on the active CAI Range row and atomically increments `current_number`:
+
+```js
+// From Service/controllers/bill.js — postBill()
+const caiRange = await CaiRanges.findOne({
+  where: { caiId: activeCai.caiId, isActive: true },
+  lock: transaction.LOCK.UPDATE,  // row-level lock prevents concurrent duplicates
+  transaction
+})
+
+const nextBillNumber = caiRange.minRange + caiRange.currentNumber
+
+if (nextBillNumber > caiRange.maxRange)
+  throw { status: 406, message: 'El rango de CAI se ha agotado' }
+
+await caiRange.update({ currentNumber: caiRange.currentNumber + 1 }, { transaction })
+```
+
+The final printed bill number is then assembled from store number, machine number, document type, and the absolute bill number:
+
+```js
+const billNumberFinal = [
+  String(user.store.storeNumber).padStart(3, '0'),      // e.g. "001"
+  String(user.checkoutMachine.machineNumber).padStart(3, '0'), // e.g. "001"
+  activeCai.documentType,                               // e.g. "01"
+  String(nextBillNumber).padStart(8, '0')               // e.g. "00000042"
+].join('-')
+// Result: "001-001-01-00000042"
+```
+
+## Range Overlap Prevention
+
+When creating a new CAI or CAI Range, Credith checks that the new `minRange` is strictly greater than the highest `maxRange` ever registered for that store — across all CAIs, not just the active one. This prevents invoice number gaps and overlaps in the audit trail:
+
+```js
+// From Service/controllers/cai.js — getStoreMaxRange()
+const storeMax = await getStoreMaxRange(storeId)
+if (storeMax > 0 && parsedMin <= storeMax) {
+  return res.status(400).json({
+    message: `El rango inicial debe ser mayor al ultimo rango registrado para esta tienda (${storeMax})`
+  })
+}
+```
+
+## Modifying and Deleting CAI Ranges
+
+Updating or deleting a CAI Range is **blocked** if any bills have already been issued against it. This protects the immutability of issued fiscal documents:
+
+```js
+// From Service/controllers/caiRange.js — updateCaiRange()
+const billCount = await Bills.count({ where: { caiRangeId: caiRange.caiRangeId } })
+if (billCount > 0) {
+  return res.status(400).json({
+    message: 'No se puede modificar el rango porque ya existen facturas emitidas'
+  })
+}
+```
+
+The same guard applies to `deleteCaiRange()` and to `deleteCai()` (which checks all child ranges).
+
+<Warning>
+**CAI Expiry blocks invoice creation.** Before adding a new CAI Range to an existing CAI, the system checks that the parent CAI's `expiration_date` is still in the future:
+
+```js
+if (new Date(cai.expirationDate) <= new Date()) {
+  return res.status(400).json({ message: 'El CAI ha expirado' })
+}
+```
+
+Likewise, during bill creation the system validates that the active CAI Range belongs to an active, non-expired CAI. If the authorization has lapsed, no new invoices can be issued until a new CAI is registered with the `isRenewal: true` flag.
+</Warning>
+
+## API Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/cais` | Create a new CAI + initial range. Deactivates current active CAI for the store. Validates `governmentId` uniqueness, future expiry, positive non-overlapping range. Accepts `isRenewal: true` to replace an active CAI. |
+| `GET` | `/api/cais` | List CAIs with pagination. Pass `?history=true` to see all historical CAIs; default returns only the latest per store. |
+| `DELETE` | `/api/cais/:id` | Delete a CAI and all its ranges. Blocked if any range has associated bills. |
+| `POST` | `/api/cai-ranges` | Add a new range to an active, non-expired CAI. Deactivates the previous active range. |
+| `GET` | `/api/cais/:caiId/ranges` | List all ranges for a specific CAI (paginated). |
+| `GET` | `/api/cai-ranges/:id` | Get a single CAI Range by UUID. |
+| `PUT` | `/api/cai-ranges/:id` | Extend `max_range`. Blocked if bills exist or new max ≤ current max. |
+| `DELETE` | `/api/cai-ranges/:id` | Delete a range. Blocked if bills exist. |

@@ -1,0 +1,356 @@
+---
+title: "Bills API — Create Tax-Compliant Invoices"
+sidebarTitle: "Bills"
+description: "POST to /api/bills to create an invoice. Credith validates the active CAI range, deducts inventory, and creates a payment plan (cash or installment) in a single transaction."
+---
+
+Bill creation in Credith is a **complex transactional operation** that touches six tables in a single database transaction. The server validates the cashier's checkout machine, resolves the active CAI and CAI Range, formats the SAR-compliant bill number, deducts inventory for every line item, calculates ISV-15 tax, and then creates either a fully-paid cash payment plan or a multi-installment credit plan — all atomically. A failure at any step rolls back the entire transaction, so partial bills are never persisted.
+
+---
+
+## `POST /api/bills`
+
+Creates a new invoice. No authentication is required on this endpoint; the `userId` in the request body is used to resolve the cashier's checkout machine and store assignment.
+
+### Validations performed (in order)
+
+1. **Cashier check** — `userId` must correspond to an existing user who has an active checkout machine assigned.
+2. **Store check** — The user's store must match the `storeId` in the request body.
+3. **CAI check** — The store must have an active CAI with an active, non-exhausted range. The range lock is held (`SELECT FOR UPDATE`) during the transaction to prevent race conditions.
+4. **Inventory check** — Every product in `details` must exist in the store's inventory with sufficient `inStock` quantity.
+
+<Note>
+  The `bill_number` for each invoice is derived from the active CAI Range as `minRange + currentNumber`. After the bill is persisted, `currentNumber` is incremented by 1 on the range record. The fully formatted `billNumberFinal` follows the pattern `{storeNumber:3}-{machineNumber:3}-{documentType}-{billNumber:8}`, e.g. `001-001-01-00000001`.
+</Note>
+
+<Warning>
+  A client can only have **one active** (status `PENDING` or `OVERDUE`) installment payment plan at a time. Attempting to create an `INSTALLMENT` bill for a client who already has an open plan returns HTTP `400`.
+</Warning>
+
+---
+
+### Request body
+
+<ParamField body="userId" type="string (UUID)" required>
+  UUID of the cashier (user) processing the sale. Must have an assigned checkout machine and a valid store association.
+</ParamField>
+
+<ParamField body="storeId" type="string (UUID)" required>
+  UUID of the store where the sale takes place. Must match the store on record for the given `userId`.
+</ParamField>
+
+<ParamField body="paymentType" type="string" required>
+  Payment method for this invoice. Accepted values: `"CASH"` or `"INSTALLMENT"`. Determines which payment-plan creation branch runs.
+</ParamField>
+
+<ParamField body="limitDate" type="string (date)">
+  Optional due date printed on the invoice, e.g. `"2025-12-31"`.
+</ParamField>
+
+<ParamField body="discountPercentage" type="integer" default="0">
+  Overall invoice-level discount percentage (stored for display; the monetary amount must be supplied in `discountAmount`).
+</ParamField>
+
+<ParamField body="discountAmount" type="number" default="0">
+  Monetary discount applied to the invoice subtotal before ISV calculation.
+</ParamField>
+
+<ParamField body="exonerated" type="number" default="0">
+  Exonerated amount (ISV-exempt portion) for fiscal reporting.
+</ParamField>
+
+<ParamField body="exempt" type="number" default="0">
+  Exempt amount for fiscal reporting.
+</ParamField>
+
+<ParamField body="details" type="array" required>
+  One or more line items. The server re-validates each item's `total` as `quantity × sellPrice × (1 - discountPercentage / 100)`.
+
+  <Expandable title="details item fields">
+    <ParamField body="details[].productId" type="string (UUID)" required>
+      UUID of the product being sold. Must exist in the store's inventory.
+    </ParamField>
+
+    <ParamField body="details[].productName" type="string" required>
+      Human-readable product name, used in error messages when stock is insufficient.
+    </ParamField>
+
+    <ParamField body="details[].quantity" type="integer" required>
+      Units sold. Must not exceed `inStock` for the product in the given store.
+    </ParamField>
+
+    <ParamField body="details[].sellPrice" type="number" required>
+      Unit price at the moment of sale (decimal).
+    </ParamField>
+
+    <ParamField body="details[].discountPercentage" type="number" default="0">
+      Per-line discount percentage. Applied before computing the line `total`.
+    </ParamField>
+
+    <ParamField body="details[].discountAmount" type="number" default="0">
+      Pre-computed monetary discount for this line item.
+    </ParamField>
+
+    <ParamField body="details[].total" type="number" required>
+      Pre-computed line total (`quantity × sellPrice × (1 - discountPercentage / 100)`). The server validates this value and returns `400` if it does not match.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="customer" type="object" required>
+  Customer information printed on the invoice.
+
+  <Expandable title="customer fields">
+    <ParamField body="customer.customerName" type="string" required>
+      Full name of the customer as printed on the invoice.
+    </ParamField>
+
+    <ParamField body="customer.customerPhone" type="string">
+      Customer phone number.
+    </ParamField>
+
+    <ParamField body="customer.customerAddress" type="string">
+      Customer address.
+    </ParamField>
+
+    <ParamField body="customer.clientId" type="string (UUID)">
+      UUID of the registered client. **Required when `paymentType` is `"INSTALLMENT"`**. The client must not have an existing active payment plan.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="paymentData" type="object" required>
+  Payment plan details. Required fields vary by `paymentType`.
+
+  <Expandable title="paymentData fields">
+    <ParamField body="paymentData.payment" type="number">
+      Amount paid upfront. For `CASH` bills this is typically the full invoice total. For `INSTALLMENT` bills this is the initial down-payment.
+    </ParamField>
+
+    <ParamField body="paymentData.startingDate" type="string (date)">
+      Start date for the installment schedule, e.g. `"2025-01-01"`. **Required for `INSTALLMENT`.**
+    </ParamField>
+
+    <ParamField body="paymentData.monthsToPay" type="integer">
+      Total number of monthly installments. **Required for `INSTALLMENT`.** If the initial payment covers the full balance, this is stored as `0` and the plan is immediately marked `PAYED`.
+    </ParamField>
+
+    <ParamField body="paymentData.paymentDay" type="integer">
+      Day of the month (1–31) on which each installment is due. The server normalizes dates that exceed the month's actual last day. **Required for `INSTALLMENT`.**
+    </ParamField>
+
+    <ParamField body="paymentData.interestRate" type="number" default="0">
+      Annual interest rate as a percentage. Stored on the plan; interest is added to individual monthly payments separately.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+### Example — CASH bill
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/bills \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "c98765e5-9ae8-4597-b95e-9889028f2222",
+    "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+    "paymentType": "CASH",
+    "limitDate": "2025-12-31",
+    "discountPercentage": 0,
+    "discountAmount": 0,
+    "exonerated": 0,
+    "exempt": 0,
+    "details": [
+      {
+        "productId": "e11111e5-9ae8-4597-b95e-9889028f4444",
+        "productName": "Laptop HP 15",
+        "quantity": 1,
+        "sellPrice": 850.00,
+        "discountPercentage": 0,
+        "discountAmount": 0,
+        "total": 850.00
+      }
+    ],
+    "customer": {
+      "customerName": "Maria Lopez",
+      "customerPhone": "9888-7766",
+      "customerAddress": "Tegucigalpa, FM"
+    },
+    "paymentData": {
+      "payment": 977.50,
+      "interestRate": 0
+    }
+  }'
+```
+
+```json Response 201
+{
+  "billId": "aa001122-5717-4562-b3fc-2c963f66afa6",
+  "billNumber": 1,
+  "billNumberFinal": "001-001-01-00000001",
+  "paymentType": "CASH",
+  "subtotal": 850.00,
+  "isv15Amount": 127.50,
+  "isv18Amount": 0,
+  "discountAmount": 0,
+  "total": 977.50,
+  "companyName": "Credith HN",
+  "companyRtn": "08011999123456",
+  "cashierName": "Carlos Flores",
+  "customerName": "Maria Lopez",
+  "caiRangeId": "c1d2e3f4-0000-4562-b3fc-2c963f66afa6",
+  "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+  "plan": {
+    "billPaymentPlanId": "bb998877-5717-4562-b3fc-2c963f66afa6",
+    "totalToPay": 0,
+    "initialPayment": 977.50,
+    "payedAmount": 977.50,
+    "status": "PAYED"
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### Example — INSTALLMENT bill
+
+<CodeGroup>
+```json Request body
+{
+  "userId": "c98765e5-9ae8-4597-b95e-9889028f2222",
+  "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
+  "paymentType": "INSTALLMENT",
+  "limitDate": "2025-12-31",
+  "discountPercentage": 0,
+  "discountAmount": 0,
+  "exonerated": 0,
+  "exempt": 0,
+  "details": [
+    {
+      "productId": "e11111e5-9ae8-4597-b95e-9889028f4444",
+      "productName": "Televisor Samsung 55\"",
+      "quantity": 1,
+      "sellPrice": 1200.00,
+      "discountPercentage": 0,
+      "discountAmount": 0,
+      "total": 1200.00
+    }
+  ],
+  "customer": {
+    "customerName": "Juan Pérez",
+    "customerPhone": "9999-8888",
+    "customerAddress": "San Pedro Sula, Cortés",
+    "clientId": "f22222e5-9ae8-4597-b95e-9889028f5555"
+  },
+  "paymentData": {
+    "payment": 380.00,
+    "startingDate": "2025-02-01",
+    "monthsToPay": 6,
+    "paymentDay": 15,
+    "interestRate": 0
+  }
+}
+```
+
+```json Response 201
+{
+  "billId": "cc334455-5717-4562-b3fc-2c963f66afa6",
+  "billNumber": 2,
+  "billNumberFinal": "001-001-01-00000002",
+  "paymentType": "INSTALLMENT",
+  "subtotal": 1200.00,
+  "isv15Amount": 180.00,
+  "total": 1380.00,
+  "companyName": "Credith HN",
+  "cashierName": "Carlos Flores",
+  "customerName": "Juan Pérez",
+  "clientId": "f22222e5-9ae8-4597-b95e-9889028f5555",
+  "caiRangeId": "c1d2e3f4-0000-4562-b3fc-2c963f66afa6",
+  "plan": {
+    "billPaymentPlanId": "dd556677-5717-4562-b3fc-2c963f66afa6",
+    "totalToPay": 1380.00,
+    "initialPayment": 380.00,
+    "payedAmount": 380.00,
+    "monthsToPay": 6,
+    "paymentDay": 15,
+    "interestRate": 0,
+    "status": "PENDING",
+    "monthlyPayments": [
+      { "monthlyPaymentId": "...", "paymentAmount": 166.67, "paymentDeadline": "2025-02-15", "isPayed": false },
+      { "monthlyPaymentId": "...", "paymentAmount": 166.67, "paymentDeadline": "2025-03-15", "isPayed": false },
+      "..."
+    ]
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### Response fields
+
+<ResponseField name="billId" type="string (UUID)">
+  Auto-generated primary key for the created bill.
+</ResponseField>
+
+<ResponseField name="billNumber" type="integer">
+  Raw sequential number within the active CAI Range (`minRange + currentNumber` at time of creation).
+</ResponseField>
+
+<ResponseField name="billNumberFinal" type="string">
+  Fully formatted SAR-compliant invoice number: `{storeNumber:3}-{machineNumber:3}-{documentType}-{billNumber:8}`.
+</ResponseField>
+
+<ResponseField name="paymentType" type="string">
+  `"CASH"` or `"INSTALLMENT"`.
+</ResponseField>
+
+<ResponseField name="subtotal" type="number">
+  Sum of all line-item totals before any invoice-level discount.
+</ResponseField>
+
+<ResponseField name="isv15Amount" type="number">
+  ISV-15 tax amount (15% of the discounted subtotal).
+</ResponseField>
+
+<ResponseField name="discountAmount" type="number">
+  Invoice-level monetary discount applied before tax.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Final invoice total: `(subtotal - discountAmount) + isv15Amount`.
+</ResponseField>
+
+<ResponseField name="companyName" type="string">
+  Snapshot of the company name at time of invoice creation.
+</ResponseField>
+
+<ResponseField name="companyRtn" type="string">
+  Snapshot of the company RTN (tax ID) at time of creation.
+</ResponseField>
+
+<ResponseField name="cashierName" type="string">
+  Full name of the user who processed the sale.
+</ResponseField>
+
+<ResponseField name="caiRangeId" type="string (UUID)">
+  UUID of the CAI Range used to generate this invoice's bill number.
+</ResponseField>
+
+<ResponseField name="plan" type="object">
+  The payment plan created alongside this bill. Shape varies by `paymentType` — see [Payment Plans](/api-reference/payment-plans) for full field definitions.
+</ResponseField>
+
+---
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400` | Invalid `paymentType`, mismatched line-item `total`, or client already has an active installment plan |
+| `404` | User, checkout machine, store, active CAI, CAI Range, company, or product inventory not found |
+| `406` | CAI Range exhausted (`nextBillNumber > maxRange`), store mismatch between user and request, or insufficient stock |
+| `500` | Unexpected server error |

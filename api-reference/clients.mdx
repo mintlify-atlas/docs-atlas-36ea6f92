@@ -1,0 +1,253 @@
+---
+title: "Clients API — Register and Manage Credit Customers"
+sidebarTitle: "Clients"
+description: "CRUD endpoints for Credith clients. Clients are identified by a unique DNI and linked to installment payment plans for credit purchases."
+---
+
+The Clients API provides full lifecycle management for the credit customers registered in Credith. A client is a person (or entity) who may purchase goods on installment credit. Clients are identified system-wide by a unique national identity number (`dni`), which is also used as the key to look up their active payment plan. Client records are not required for `CASH` bills, but are **mandatory** when creating an `INSTALLMENT` bill — the `clientId` must be present in the `customer` object and the client must not already have an open plan.
+
+None of the Clients endpoints require authentication.
+
+---
+
+## `GET /api/clients`
+
+Returns a paginated list of all clients, ordered by `name` ascending. Supports optional filtering by DNI.
+
+**Query parameters**
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of client records to return.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip (for pagination).
+</ParamField>
+
+<ParamField query="dni" type="string">
+  Optional exact-match filter on `dni`. Useful for quick client lookups at point-of-sale.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "total": 42,
+  "data": [
+    {
+      "clientId": "f22222e5-9ae8-4597-b95e-9889028f5555",
+      "name": "Ana García",
+      "dni": "0801-1985-54321",
+      "phone": "9777-6655",
+      "address": "Comayagüela, FM",
+      "isActive": true
+    }
+  ]
+}
+```
+
+---
+
+## `GET /api/clients/:id`
+
+Returns a single client record by its UUID.
+
+**Path parameter**
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the client to retrieve.
+</ParamField>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `404` | Client not found |
+
+---
+
+## `POST /api/clients`
+
+Creates a new client. The `name` field is the only required field. If a `dni` is provided it must be unique across all clients in the system.
+
+<Warning>
+  DNI uniqueness is enforced at the application layer before the database insert. Submitting a DNI that belongs to another client returns HTTP `400`. To avoid conflicts, always search by `?dni=` before registering a new client.
+</Warning>
+
+<Note>
+  The `dni` is the lookup key used by `GET /api/payment-plan/:dni` to retrieve a client's active installment plan. Register an accurate DNI to ensure seamless credit tracking.
+</Note>
+
+**Request body**
+
+<ParamField body="name" type="string" required>
+  Full name of the client. Cannot be blank.
+</ParamField>
+
+<ParamField body="dni" type="string">
+  National identity number (up to 25 characters). Must be globally unique if provided. Example: `"0801-1990-12345"`.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  Client phone number (up to 25 characters). Example: `"9999-9999"`.
+</ParamField>
+
+<ParamField body="address" type="string">
+  Client's physical address. Example: `"Tegucigalpa, Honduras"`.
+</ParamField>
+
+**Example**
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/clients \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Juan Pérez",
+    "dni": "0801-1990-12345",
+    "phone": "9999-9999",
+    "address": "Tegucigalpa, Honduras"
+  }'
+```
+
+```json Response 201
+{
+  "message": "Cliente creado correctamente",
+  "client": {
+    "clientId": "f22222e5-9ae8-4597-b95e-9889028f5555",
+    "name": "Juan Pérez",
+    "dni": "0801-1990-12345",
+    "phone": "9999-9999",
+    "address": "Tegucigalpa, Honduras",
+    "isActive": true,
+    "createdAt": "2025-01-15T10:30:00.000Z",
+    "updatedAt": "2025-01-15T10:30:00.000Z"
+  }
+}
+```
+</CodeGroup>
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | `name` is missing/blank, or a client with the same `dni` already exists |
+
+---
+
+## `PUT /api/clients/:id`
+
+Updates one or more fields on an existing client. Only fields included in the request body are modified. To clear a field, explicitly pass `null` or an empty string as appropriate.
+
+When `dni` is provided and differs from the client's current value, uniqueness is re-validated against all other clients.
+
+**Path parameter**
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the client to update.
+</ParamField>
+
+**Request body**
+
+<ParamField body="name" type="string">
+  Updated full name. Cannot be set to an empty string.
+</ParamField>
+
+<ParamField body="dni" type="string">
+  Updated DNI. Must be unique if changed and non-empty.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  Updated phone number.
+</ParamField>
+
+<ParamField body="address" type="string">
+  Updated address.
+</ParamField>
+
+**Response**
+
+```json
+{
+  "message": "Cliente actualizado correctamente",
+  "client": {
+    "clientId": "f22222e5-9ae8-4597-b95e-9889028f5555",
+    "name": "Juan Pérez Actualizado",
+    "dni": "0801-1990-12345",
+    "phone": "8888-8888",
+    "address": "San Pedro Sula, Cortés",
+    "isActive": true
+  }
+}
+```
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `400` | `name` set to empty string, or updated `dni` conflicts with another client |
+| `404` | Client not found |
+
+---
+
+## `DELETE /api/clients/:id`
+
+Permanently (hard) deletes a client record. This operation does not cascade to payment plans — associated installment plans remain in the database for historical reporting.
+
+**Path parameter**
+
+<ParamField path="id" type="string (UUID)" required>
+  UUID of the client to delete.
+</ParamField>
+
+**Response**
+
+```json
+{ "message": "Cliente eliminado correctamente" }
+```
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `404` | Client not found |
+
+---
+
+## Client data model
+
+<ResponseField name="clientId" type="string (UUID)">
+  Auto-generated UUIDv4 primary key.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Full name of the client. Required and non-null.
+</ResponseField>
+
+<ResponseField name="dni" type="string | null">
+  National identity number. Maximum 25 characters. Unique index enforced (`idx_client_dni_unique`). Used as the path parameter for `GET /api/payment-plan/:dni`.
+</ResponseField>
+
+<ResponseField name="phone" type="string | null">
+  Client contact phone number. Maximum 25 characters.
+</ResponseField>
+
+<ResponseField name="address" type="string | null">
+  Client physical address.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Whether the client account is considered active. Defaults to `true`. Can be toggled but there is no dedicated activate/deactivate endpoint — update via `PUT /api/clients/:id`.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string (date-time)">
+  Timestamp when the record was created.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string (date-time)">
+  Timestamp of the last update.
+</ResponseField>
+
+<ResponseField name="deletedAt" type="string (date-time) | null">
+  Soft-delete timestamp. Set by `DELETE /api/clients/:id` — records with a non-null value here are excluded from all normal queries.
+</ResponseField>

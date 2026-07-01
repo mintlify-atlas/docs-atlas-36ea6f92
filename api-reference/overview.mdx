@@ -1,0 +1,192 @@
+---
+title: "Credith REST API Overview and Base Configuration"
+sidebarTitle: "Overview"
+description: "The Credith API is a RESTful JSON service running on Express. All endpoints are prefixed with /api and return JSON responses with standard HTTP status codes."
+---
+
+The Credith API is a RESTful service built with **Express.js** and backed by **PostgreSQL** (via Sequelize ORM). It serves as the data layer for the Credith point-of-sale and credit management platform, handling everything from user authentication and product inventory to CAI-based invoicing and installment payment plans. All routes are mounted under the `/api` prefix, all request bodies are JSON, and all responses are JSON.
+
+## Base URL
+
+In development, the server runs on port **3000** by default:
+
+```
+http://localhost:3000/api
+```
+
+In production (Docker Compose), the port is controlled by the `PORT` environment variable:
+
+```bash
+# .env (Docker Compose)
+PORT=8080
+```
+
+The server is started in `index.js` and reads `process.env.PORT`, falling back to `3000` when the variable is not set:
+
+```javascript
+const port = process.env.PORT || 3000
+app.listen(port, () => {
+  console.log(`Example app listening on port ${port}`)
+})
+```
+
+## Request Format
+
+All write operations (`POST`, `PUT`, `PATCH`) expect a JSON body. Set the `Content-Type` header accordingly:
+
+```bash
+Content-Type: application/json
+```
+
+Example request headers for a JSON POST:
+
+```bash
+POST /api/users/login HTTP/1.1
+Host: localhost:3000
+Content-Type: application/json
+```
+
+## Response Format
+
+All endpoints return JSON. Responses follow standard HTTP semantics — success payloads are wrapped in a top-level object; error payloads always contain a `message` field.
+
+| Status Code | Meaning |
+|---|---|
+| `200 OK` | Request succeeded; body contains the result |
+| `201 Created` | Resource was successfully created |
+| `400 Bad Request` | Validation failed, duplicate entry, or invalid field value |
+| `401 Unauthorized` | Missing or invalid JWT token (protected routes only) |
+| `403 Forbidden` | Token present but permission denied |
+| `404 Not Found` | Requested resource does not exist |
+| `500 Internal Server Error` | Unhandled server-side exception |
+
+Error response shape:
+
+```json
+{
+  "message": "El email ya existe"
+}
+```
+
+Paginated list response shape:
+
+```json
+{
+  "total": 42,
+  "data": [ ... ]
+}
+```
+
+## Pagination
+
+All list endpoints that return potentially large collections support cursor-style pagination via two query parameters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `limit` | `integer` | `10` | Maximum number of records to return |
+| `offset` | `integer` | `0` | Number of records to skip before returning results |
+
+```bash
+# First page of 10 users
+GET /api/users?limit=10&offset=0
+
+# Second page of 10 users
+GET /api/users?limit=10&offset=10
+
+# First page of 25 companies
+GET /api/companies?limit=25&offset=0
+```
+
+This pattern applies to:  `GET /api/users`, `GET /api/companies`, `GET /api/stores`, `GET /api/products`, `GET /api/cais`, `GET /api/cai-ranges`, `GET /api/checkout-machines`, `GET /api/clients`, `GET /api/roles`, and `GET /api/users/employees`.
+
+<Note>
+  Pagination parameters are always optional. When omitted, `limit` defaults to `10` and `offset` defaults to `0`. The response `total` field reflects the **full** count of matching records in the database, not just the current page.
+</Note>
+
+## Global Middleware
+
+The following middleware is registered in `app.js` and applies to all (or nearly all) incoming requests before they reach route handlers:
+
+| Middleware | Scope | Description |
+|---|---|---|
+| `cors` | Global | Allows cross-origin requests from `CORS_ORIGIN` (default: `http://localhost:5173`) with credentials support, enabling cookie transmission from the frontend |
+| `cookie-parser` | Global | Parses the `Cookie` header and populates `req.cookies`, including the `token` and `session` cookies used for authentication |
+| `express.json()` | Global | Parses incoming `application/json` request bodies and populates `req.body` |
+| `LoggerMiddleware` | Global (non-test) | Custom middleware that logs the HTTP method, URL, timestamp, response status code, and total duration in milliseconds. Skipped when `NODE_ENV=test`. Swagger asset routes are silently ignored |
+| `authMiddleware` | 3 user routes only | Reads `req.cookies.token`, calls `verifyToken()`, and attaches the decoded payload to `req.user`. Returns `401` if the token is missing or invalid |
+
+```javascript
+// app.js — middleware registration order
+app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173', credentials: true }))
+app.use(cookieParser())
+app.use(express.json())
+if (process.env.NODE_ENV !== 'test') {
+    app.use(LoggerMiddleware)
+}
+```
+
+## Available Resource Groups
+
+<CardGroup cols={2}>
+  <Card title="Users & Roles" icon="users" href="/api-reference/users">
+    Register users, manage activation status, update passwords, assign roles, and list employees.
+  </Card>
+  <Card title="Companies & Stores" icon="building" href="/api-reference/companies">
+    Create and update companies (with RTN), manage store branches, and control store activation.
+  </Card>
+  <Card title="Products & Categories" icon="box" href="/api-reference/products">
+    Full product lifecycle including soft-delete/recover, category tagging, and store inventory links.
+  </Card>
+  <Card title="CAI & Invoicing" icon="file-invoice" href="/api-reference/cai">
+    Manage government-authorized invoice numbers (CAIs), their numeric ranges, and checkout machines.
+  </Card>
+  <Card title="Bills" icon="receipt" href="/api-reference/bills">
+    Create fiscal invoices with line items, ISV tax breakdown, discounts, and payment type selection.
+  </Card>
+  <Card title="Payment Plans" icon="calendar-days" href="/api-reference/payment-plans">
+    Manage INSTALLMENT plans — recalculate schedules, record payments, and track overdue balances.
+  </Card>
+  <Card title="Clients" icon="address-book" href="/api-reference/clients">
+    Create and manage clients identified by DNI; link clients to installment payment plans.
+  </Card>
+  <Card title="Reports" icon="chart-bar" href="/api-reference/reports">
+    Product performance, per-store monthly summaries, and company-level aggregated revenue reports.
+  </Card>
+</CardGroup>
+
+## Health Check
+
+A root-level health check endpoint is available outside the `/api` prefix. It returns a static JSON message confirming the server is running:
+
+```bash
+curl http://localhost:3000/
+```
+
+```json
+{
+  "message": "Hello from the backend!"
+}
+```
+
+<Tip>
+  Use this endpoint to verify the service is up before making authenticated API calls. It requires no credentials, no cookies, and no JSON body.
+</Tip>
+
+## Swagger UI
+
+When `NODE_ENV=development`, the API automatically serves an interactive Swagger UI at:
+
+```
+http://localhost:3000/api-docs
+```
+
+The UI is generated from JSDoc `@swagger` annotations on each route file and provides a live sandbox for testing every endpoint. It is **not** available in production.
+
+```bash
+# Start in development mode to enable Swagger
+NODE_ENV=development node index.js
+```
+
+<Info>
+  The logger middleware silently ignores requests to Swagger static assets (`/api-docs/swagger-ui.css`, `swagger-ui-bundle.js`, etc.) to keep the console output clean during API exploration.
+</Info>

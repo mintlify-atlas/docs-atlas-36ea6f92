@@ -1,0 +1,179 @@
+---
+title: "Per-Store Inventory Tracking"
+sidebarTitle: "Inventory"
+description: "Credith tracks product stock per store via the store_inventories table. Stock automatically decrements when a bill is created and can be managed through the inventory API."
+---
+
+Credith manages product stock at the per-store level. Rather than tracking a single global quantity for each product, Credith uses a junction table — `stores_inventories` — that links every (store, product) pair to an independent `in_stock` count. This means the same product can have 20 units at one branch and 3 at another, and each store's inventory is managed and reported independently. Stock levels are decremented automatically during bill creation and can be adjusted, transferred, or queried through the inventory API.
+
+## The `stores_inventories` Table
+
+The `stores_inventories` table acts as a many-to-many join between `stores` and `products`, with additional columns for tracking current stock.
+
+| Field | Type | Description |
+|---|---|---|
+| `product_id` | UUID | FK → `products.product_id`. Part of the composite primary key. |
+| `store_id` | UUID | FK → `stores.store_id`. Part of the composite primary key. |
+| `in_stock` | INTEGER | Current number of units available at this store. Defaults to `1`. |
+| `is_active` | BOOLEAN | Whether this inventory entry is active. Defaults to `true`. |
+
+```js
+// From Service/models/entities/storeInventory.js
+StoreInventory.init({
+  productId: { type: DataTypes.UUID, allowNull: false, primaryKey: true },
+  storeId:   { type: DataTypes.UUID, allowNull: false, primaryKey: true },
+  inStock:   { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+  isActive:  { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, field: 'is_active' }
+}, {
+  tableName: 'stores_inventories',
+  schema: 'cd',
+  timestamps: false,
+  underscored: true
+})
+```
+
+Note that `stores_inventories` uses a **composite primary key** (`product_id` + `store_id`) and has no `created_at`/`updated_at` timestamps, unlike most other tables in the `cd` schema.
+
+## Automatic Stock Decrement During Bill Creation
+
+When a new bill is posted via `POST /api/bills`, stock is decremented for every line item inside the same database transaction that creates the bill, bill details, CAI number, and payment plan. This ensures atomicity — if any part of the bill fails, inventory is not touched.
+
+```js
+// From Service/controllers/bill.js — postBill()
+for (const detail of details) {
+  const productInventory = await StoresInventories.findOne({
+    where: { storeId: storeId, productId: detail.productId },
+    transaction: transaction
+  })
+
+  if (!productInventory)
+    throw { status: 404, message: `El producto ${detail.productName} no existe en el inventario de esta sucursal` }
+
+  if (productInventory.inStock < detail.quantity) {
+    throw { status: 406, message: `La sucursal [${storeId}] no cuenta con tantos ${detail.productName} en existencia!` }
+  }
+
+  await productInventory.update(
+    { inStock: productInventory.inStock - detail.quantity },
+    { transaction }
+  )
+}
+```
+
+<Warning>
+Attempting to sell more units than are currently in stock **will fail at bill creation time** with HTTP `406`. The entire bill transaction is rolled back — no invoice is issued, no CAI number is consumed, and no payment plan is created. Make sure inventory is accurate before processing a sale.
+</Warning>
+
+## The `is_active` Flag
+
+Each inventory entry carries an `is_active` boolean flag (added in migration `20260619013813`). This allows store operators to deactivate a product at a specific store without deleting the record or affecting stock at other stores. An inactive inventory entry signals that the product is not currently being sold at that location, even if `in_stock > 0`.
+
+## Products Across Multiple Stores
+
+Because `stores_inventories` is a many-to-many join table, a single product can be stocked at many stores simultaneously, each with its own independent `in_stock` count:
+
+```
+stores ──< stores_inventories >── products
+  store A: product X → in_stock: 20
+  store B: product X → in_stock:  3
+  store C: product X → in_stock:  0
+```
+
+This architecture allows ownership-level reporting to aggregate or compare stock across branches, while store-level queries are scoped to a single `store_id`.
+
+## API Reference
+
+<Accordion title="GET /api/stores/:storeId/inventory — Full store inventory">
+Returns the full product catalog for a specific store, including each product's `in_stock` count from the `stores_inventories` through-table.
+
+```http
+GET /api/stores/:storeId/inventory
+```
+
+Response includes the `Store` record with an embedded `products` array, each product carrying `{ inStock }` from the junction.
+</Accordion>
+
+<Accordion title="GET /api/inventory/my-store — Current user's store inventory">
+Returns inventory for the store assigned to the authenticated user (`req.user.storeId`). Includes `productId`, `name`, `description`, `sellPrice`, `buyPrice`, `imageUrl`, and `minGainPercentage` per product.
+
+```http
+GET /api/inventory/my-store
+```
+
+Returns `{ total, data[] }` where each item includes the product details and `inStock`.
+</Accordion>
+
+<Accordion title="GET /api/inventory — Paginated inventory across all stores">
+Returns all `stores_inventories` records with pagination, including product name/price and store information.
+
+```http
+GET /api/inventory?limit=10&offset=0
+```
+
+Returns `{ total, data[] }`.
+</Accordion>
+
+<Accordion title="GET /api/inventory/product/:productId/store/:storeId — Single product stock">
+Fetch the `stores_inventories` record for a specific product at a specific store.
+
+```http
+GET /api/inventory/product/:productId/store/:storeId
+```
+
+Returns the raw inventory record including `inStock` and `isActive`.
+</Accordion>
+
+<Accordion title="PUT /api/inventory — Update stock level">
+Manually set the `in_stock` count for a (product, store) pair. Useful for corrections after physical stock counts.
+
+```http
+PUT /api/inventory
+Content-Type: application/json
+
+{
+  "productId": "<uuid>",
+  "storeId":   "<uuid>",
+  "stock":     25
+}
+```
+
+`stock` must be `≥ 0`. Returns `{ message, stockActual }`.
+</Accordion>
+
+<Accordion title="POST /api/inventory/transfer — Transfer stock between stores">
+Move a quantity of a product from one store to another. If the destination store does not yet have an inventory record for the product, one is created automatically.
+
+```http
+POST /api/inventory/transfer
+Content-Type: application/json
+
+{
+  "productId":   "<uuid>",
+  "fromStoreId": "<uuid>",
+  "toStoreId":   "<uuid>",
+  "quantity":    10
+}
+```
+
+Validation:
+- `fromStoreId` and `toStoreId` must be different.
+- Source store must have at least `quantity` units in stock.
+- `quantity` must be `≥ 1`.
+</Accordion>
+
+<Accordion title="GET /api/inventory/low-stock — Items below threshold">
+Returns inventory items whose `in_stock` is at or below a configurable threshold. Useful for reorder alerts.
+
+```http
+GET /api/inventory/low-stock?threshold=5
+```
+
+- **OWNER role**: returns low-stock items across all stores belonging to their company.
+- **ADMIN role**: returns low-stock items only for their assigned store.
+
+Default `threshold` is `5` if not specified.
+</Accordion>
+
+## Relationship to Reporting
+
+The inventory system feeds directly into the product performance report at `GET /api/reports/products`. That endpoint joins `stores_inventories.in_stock` with bill detail quantities to return side-by-side in-stock vs. sold counts per product per store — giving owners a live picture of which products are moving and which are stagnating on shelves.

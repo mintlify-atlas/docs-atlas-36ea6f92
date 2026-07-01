@@ -1,0 +1,276 @@
+---
+title: "API Authentication with JWT Cookies"
+sidebarTitle: "Authentication"
+description: "Credith authenticates requests using JWT tokens stored in HTTP cookies. Register or log in to receive a token, then send cookies with subsequent requests."
+---
+
+Credith authenticates users with **JWT tokens stored in HTTP cookies** — no `Authorization: Bearer` header is needed. When you register or log in, the server calls `generateToken()` and writes the signed JWT directly into a `token` cookie on the response. From that point on, your HTTP client automatically includes the cookie on every subsequent request to the same origin. The server-side `authMiddleware` reads `req.cookies.token`, verifies it with `verifyToken()`, and attaches the decoded payload to `req.user` for the duration of that request lifecycle.
+
+## Obtaining a Token
+
+There are two ways to get a JWT cookie: registering a new user account or logging in with an existing one.
+
+### Register — `POST /api/users`
+
+Creates a new user record and returns a `201` response. The server validates all required fields, hashes the password with bcrypt, persists the user, and assigns the requested role (defaults to `Employee`).
+
+<ParamField body="first_name" type="string" required>
+  User's first given name. Cannot be blank.
+</ParamField>
+
+<ParamField body="second_name" type="string" required>
+  User's second given name. Cannot be blank.
+</ParamField>
+
+<ParamField body="first_last_name" type="string" required>
+  User's first family name. Cannot be blank.
+</ParamField>
+
+<ParamField body="second_last_name" type="string" required>
+  User's second family name. Cannot be blank.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Unique email address. Returns `400` if already registered.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Must be at least **6 characters** long. Stored as a bcrypt hash.
+</ParamField>
+
+<ParamField body="storeId" type="string (UUID)" required>
+  UUID of the store this user belongs to. Must reference an existing `stores` record.
+</ParamField>
+
+<ParamField body="checkoutMachineId" type="string (UUID)" required>
+  UUID of the checkout machine assigned to this user. Must reference an existing `checkout_machines` record.
+</ParamField>
+
+<ParamField body="role" type="string">
+  Optional role name. Accepted values: `Admin`, `Employee`. Defaults to `Employee` if omitted or invalid.
+</ParamField>
+
+```bash
+curl -s -X POST http://localhost:3000/api/users \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{
+    "first_name": "Juan",
+    "second_name": "Carlos",
+    "first_last_name": "Pérez",
+    "second_last_name": "López",
+    "email": "juan@example.com",
+    "password": "secret123",
+    "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+    "checkoutMachineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "role": "Employee"
+  }'
+```
+
+Successful response (`201 Created`):
+
+```json
+{
+  "message": "Usuario registrado existosamente",
+  "user": {
+    "userId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+    "first_name": "Juan",
+    "second_name": "Carlos",
+    "first_last_name": "Pérez",
+    "second_last_name": "López",
+    "email": "juan@example.com",
+    "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+    "isActive": true
+  }
+}
+```
+
+### Login — `POST /api/users/login`
+
+Authenticates an existing user by email and password. On success, the server generates a JWT with `generateToken()`, sets two cookies (`token` and `session`), and returns `200`.
+
+<ParamField body="email" type="string" required>
+  Registered email address of the user.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Verified against the stored bcrypt hash.
+</ParamField>
+
+```bash
+curl -s -X POST http://localhost:3000/api/users/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{
+    "email": "juan@example.com",
+    "password": "secret123"
+  }'
+```
+
+Successful response (`200 OK`):
+
+```json
+{
+  "message": "Inicio de sesión exitoso"
+}
+```
+
+The two cookies set by the server on a successful login:
+
+| Cookie | `httpOnly` | Description |
+|---|---|---|
+| `token` | `true` | Signed JWT. Not readable from JavaScript. Sent automatically by the browser on every request. |
+| `session` | `false` | JSON string with `userId`, `first_name`, `role`, `storeId`, `storeAddress`, `checkoutMachine`, etc. Readable by the frontend via `document.cookie`. |
+
+## Using the Token
+
+Once you have logged in and captured the cookies (with `-c cookies.txt`), pass `--cookie cookies.txt` on every subsequent request that requires authentication:
+
+```bash
+# Deactivate a user — requires auth cookie
+curl -s -X PUT http://localhost:3000/api/users/desactivate/d290f1ee-6c54-4b01-90e6-d701748f0851 \
+  --cookie cookies.txt
+```
+
+In a browser or frontend application, cookies are sent **automatically** with every same-origin `fetch` or `XMLHttpRequest` call — no manual header wiring is needed (provided `credentials: 'include'` is set on fetch, or `withCredentials: true` on Axios).
+
+### How `authMiddleware` Works
+
+The middleware, defined in `middlewares/authMiddleware.js`, runs the following logic on every protected route:
+
+```javascript
+const authMiddleware = (req, res, next) => {
+  try {
+    const token = req.cookies?.token          // read from cookie jar
+    if (!token) {
+      return res.status(401).json({ message: "Token requerido" })
+    }
+    const decoded = verifyToken(token)        // jwt.verify(token, process.env.JWT_SECRET)
+    req.user = decoded                        // attach { id, email, role, storeId }
+    next()
+  } catch (error) {
+    return res.status(401).json({ message: "Token invalido" })
+  }
+}
+```
+
+The decoded `req.user` payload contains:
+
+```json
+{
+  "id": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "email": "juan@example.com",
+  "role": "Employee",
+  "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737"
+}
+```
+
+### Token Lifetime
+
+Tokens are signed with `process.env.JWT_SECRET` and expire after `COOKIE_LIFETIME_HOURS` hours (default: **2 hours**). The cookie's `maxAge` is set to the same duration so both the cookie and the token expire together.
+
+```javascript
+// helper/jwt.js — token generation
+jwt.sign(
+  { id: user.userId, email: user.email, role, storeId },
+  process.env.JWT_SECRET,
+  { expiresIn: `${process.env.COOKIE_LIFETIME_HOURS || 2}h` }
+)
+```
+
+## Protected Routes
+
+<Warning>
+  The vast majority of Credith API endpoints are **unauthenticated** — they accept requests from anyone without a token. Authentication is currently enforced on only **three** user-management routes.
+</Warning>
+
+| Method | Path | Description |
+|---|---|---|
+| `PUT` | `/api/users/desactivate/:id` | Soft-deactivates a user (sets `isActive = false`). Requires a valid `token` cookie. |
+| `PUT` | `/api/users/activate/:id` | Re-activates a previously deactivated user (sets `isActive = true`). Requires a valid `token` cookie. |
+| `PUT` | `/api/users/update-password` | Updates the authenticated user's own password. Requires a valid `token` cookie. |
+
+All other endpoints — companies, stores, products, categories, CAIs, bills, payment plans, clients, roles, reports — accept requests without any cookie or token.
+
+## Updating Your Password
+
+The `PUT /api/users/update-password` endpoint updates the password of the currently authenticated user. The user's `id` is taken directly from `req.user.id` (the decoded JWT payload), so no `:id` path parameter is needed.
+
+<ParamField body="currentPassword" type="string" required>
+  The user's existing plain-text password. Verified against the stored bcrypt hash before the update is applied. Returns `400` if incorrect.
+</ParamField>
+
+<ParamField body="newPassword" type="string" required>
+  The desired new password. Must be at least **6 characters** long.
+</ParamField>
+
+```bash
+curl -s -X PUT http://localhost:3000/api/users/update-password \
+  -H "Content-Type: application/json" \
+  --cookie cookies.txt \
+  -d '{
+    "currentPassword": "secret123",
+    "newPassword": "newSecret456"
+  }'
+```
+
+Successful response (`200 OK`):
+
+```json
+{
+  "message": "Contraseña actualizada correctamente"
+}
+```
+
+## Session Cookie
+
+In addition to the HttpOnly `token` cookie, the server sets a `session` cookie containing a JSON-encoded object with display-safe user data. Unlike `token`, this cookie is **not** HttpOnly, meaning the frontend JavaScript can read it directly (e.g. to show the logged-in user's name in the UI):
+
+```json
+{
+  "userId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "first_name": "Juan",
+  "second_name": "Carlos",
+  "first_last_name": "Pérez",
+  "second_last_name": "López",
+  "email": "juan@example.com",
+  "role": "Employee",
+  "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+  "storeAddress": 101,
+  "checkoutMachine": {
+    "checkoutMachineId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Caja Principal",
+    "machineNumber": 1
+  }
+}
+```
+
+<Info>
+  The `session` cookie is populated at login time and reflects the user's role and store assignment at that moment. It is **not** updated automatically if those values change server-side before the session expires. Re-login to refresh it.
+</Info>
+
+## Logging Out
+
+Send a `POST` to `/api/users/logout` to clear both the `token` and `session` cookies. No request body or auth cookie is required — the server unconditionally clears both cookies.
+
+```bash
+curl -s -X POST http://localhost:3000/api/users/logout \
+  --cookie cookies.txt \
+  -c cookies.txt
+```
+
+Successful response (`200 OK`):
+
+```json
+{
+  "message": "Sesión cerrada"
+}
+```
+
+After logout, any attempt to call a protected route will return:
+
+```json
+{
+  "message": "Token requerido"
+}
+```

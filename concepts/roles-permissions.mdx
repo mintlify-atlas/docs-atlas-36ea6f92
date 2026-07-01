@@ -1,0 +1,144 @@
+---
+title: "Roles and Permissions in Credith"
+sidebarTitle: "Roles & Permissions"
+description: "Credith uses three roles — Owner, Admin, and Employee — to control access to dashboard features, API routes, and store management operations."
+---
+
+Credith enforces a role-based access control (RBAC) model across both its Express.js API and its React dashboard. Every authenticated user carries one of three roles — `OWNER`, `ADMIN`, or `EMPLOYEE` — and that role determines which menu items are visible in the sidebar, which API routes can be called, and which store-scoped data is returned. Roles are stored in the database and evaluated at runtime on each request.
+
+## The Three Roles
+
+Roles are defined as a frozen constant in `Service/helper/roles.js` and mirrored in the frontend `Website/src/helpers/permissions.js`:
+
+```js
+const ROLE = Object.freeze({
+  OWNER:    'OWNER',
+  ADMIN:    'ADMIN',
+  EMPLOYEE: 'EMPLOYEE',
+})
+```
+
+<CardGroup cols={3}>
+  <Card title="OWNER" icon="crown">
+    Full platform access. Manages stores, employees, CAI authorizations, checkout machines, categories, products, sales, reports, credit plans, and invoices. Sees data across **all** stores in the company.
+  </Card>
+  <Card title="ADMIN" icon="user-tie">
+    Store-level manager. Can process sales, manage products, view credit plans and invoices. Data is automatically scoped to their assigned store (`req.user.storeId`).
+  </Card>
+  <Card title="EMPLOYEE" icon="user">
+    Front-line cashier. Can view credit plans, invoices, and the home dashboard. Bills are scoped to their own `userId` when listing invoices.
+  </Card>
+</CardGroup>
+
+## Dashboard Menu Permissions
+
+The `menuItems` array in `permissions.js` controls which sidebar links each role can see. Items not in a user's `roles` array are hidden automatically by the frontend.
+
+| Menu Key | Label (ES) | Path | Roles Allowed |
+|---|---|---|---|
+| `home` | Inicio | `/` | OWNER, ADMIN, EMPLOYEE |
+| `stores` | Tiendas | `/admin/stores` | OWNER |
+| `cai` | CAI | `/admin/cai` | OWNER |
+| `employees` | Empleados | `/admin/employees` | OWNER |
+| `machines` | Cajas | `/admin/machines` | OWNER |
+| `sales` | Ventas | `/cart` | OWNER, ADMIN |
+| `products` | Productos | `/products` | OWNER, ADMIN |
+| `categories` | Categorias | `/owner/category` | OWNER |
+| `creditPlans` | Planes de credito | `/credit-plans` | OWNER, ADMIN, EMPLOYEE |
+| `invoices` | Facturas | `/bills` | OWNER, ADMIN, EMPLOYEE |
+| `reports` | Reportes | `/reports` | OWNER |
+
+## How Authentication Works
+
+The `authMiddleware` in `Service/middlewares/authMiddleware.js` protects routes by reading a JWT from the `token` cookie attached to the request:
+
+```js
+const authMidleware = (req, res, next) => {
+  try {
+    const token = req.cookies?.token
+
+    if (!token) {
+      return res.status(401).json({ message: "Token requerido" })
+    }
+
+    const decoded = verifyToken(token)
+    req.user = decoded  // attaches id, role, storeId, etc.
+
+    next()
+  } catch (error) {
+    return res.status(401).json({ message: "Token invalido" })
+  }
+}
+```
+
+Once the token is verified, the decoded payload is attached to `req.user` and is available to all downstream middleware and controllers. The `role` field on `req.user` defaults to `ROLE.EMPLOYEE` if missing.
+
+## How Role Enforcement Works
+
+The `roleMiddleware` factory in `Service/middlewares/roleMiddleware.js` wraps any route that needs role-gating. It is called with one or more allowed roles and returns a middleware function:
+
+```js
+const roleMiddleware = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ message: "Usuario no autenticado" })
+    }
+
+    const userRole = req.user.role || ROLE.EMPLOYEE
+
+    if (!allowedRoles.includes(userRole)) {
+      return res.status(403).json({ message: "No tienes permiso para realizar esta accion" })
+    }
+
+    next()
+  }
+}
+```
+
+Routes that should be owner-only are protected like this:
+
+```js
+router.put('/desactivate/:id', authMiddleware, roleMiddleware(ROLE.OWNER), deactivateUser)
+```
+
+## Role Assignment in the Database
+
+Roles are stored in a `roles` table and linked to users through a **many-to-many** junction table `users_roles`. Each record in `users_roles` associates a `user_id` with a `role_id`.
+
+```
+users ──< users_roles >── roles
+```
+
+To assign a role to a user, call:
+
+```http
+POST /api/roles/associate-user
+Content-Type: application/json
+
+{
+  "userId": "<uuid>",
+  "roleId": "<uuid>"
+}
+```
+
+<Note>
+Most API endpoints in Credith are currently **unauthenticated** — no JWT is required to call them. Only three user-management routes enforce the `authMiddleware` + `roleMiddleware` stack:
+
+- `PUT /api/users/desactivate/:id` — deactivate a user (OWNER only)
+- `PUT /api/users/activate/:id` — reactivate a user (OWNER only)
+- `PUT /api/users/update-password` — change the authenticated user's own password
+
+All other routes (companies, stores, products, CAIs, bills, payment plans, etc.) are open. Plan your network-layer security accordingly.
+</Note>
+
+## Bill Visibility by Role
+
+The role system also scopes data returned from `GET /api/bills`. Controllers inspect `req.user.role` at runtime:
+
+| Role | Bills Visible |
+|---|---|
+| `OWNER` | All bills across all stores |
+| `ADMIN` | Only bills where `store_id = req.user.storeId` |
+| `EMPLOYEE` | Only bills where `user_id = req.user.id` |
+
+The same pattern applies to the `GET /api/payment-plan/pending-payments` endpoint, where non-owner users see only payments linked to their store.

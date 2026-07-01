@@ -1,0 +1,200 @@
+---
+title: "Deploy Credith with Docker Compose"
+sidebarTitle: "Deployment"
+description: "Run Credith in production using Docker Compose with three services: PostgreSQL, the Express API, and the React frontend built with Vite."
+---
+
+Credith ships with two Docker Compose files: `docker-compose.yml` for local development (database only, no service or website containers) and `docker-compose-prod.yml` for a fully self-contained production deployment. The production file builds all three services from source — `credith_db` (PostgreSQL 17), `credith_service` (Express API), and `credith_website` (Vite-compiled React SPA) — and wires them together with health checks and dependency ordering so the stack comes up cleanly in a single command.
+
+## Production Deployment
+
+<Steps>
+  <Step title="Build and Start the Production Stack">
+    From the repository root, build all images and start every service in detached mode:
+
+    ```bash
+    docker compose -f docker-compose-prod.yml up --build -d
+    ```
+
+    The `--build` flag forces Docker to rebuild the `credith_service` and `credith_website` images even if cached layers exist. Use this on every deployment to pick up code changes.
+
+    You can follow the startup logs to monitor progress:
+
+    ```bash
+    docker compose -f docker-compose-prod.yml logs -f
+    ```
+  </Step>
+
+  <Step title="Wait for the Database Health Check">
+    The `credith_service` container will not start until `credith_db` passes its health check. The check runs `pg_isready -U postgres` every 5 seconds, with a timeout of 5 seconds and up to 10 retries (50 seconds maximum wait). Once PostgreSQL is accepting connections you will see the service and website containers start automatically.
+
+    To verify the database is healthy:
+
+    ```bash
+    docker inspect --format='{{.State.Health.Status}}' credith_db
+    ```
+
+    Expected output: `healthy`
+  </Step>
+
+  <Step title="Run Database Migrations">
+    After the stack is up, apply all Sequelize migrations to create the `cd` schema and every table:
+
+    ```bash
+    docker exec -it credith_service pnpm migrate
+    ```
+
+    This command runs `sequelize-cli db:migrate` inside the container using the environment variables already configured in `docker-compose-prod.yml`. Migrations are idempotent — running them multiple times is safe.
+  </Step>
+
+  <Step title="Seed Production Base Data">
+    Populate the database with the production baseline: the three roles (OWNER, ADMIN, EMPLOYEE), the initial company record, one store, one checkout machine, five product categories, and a default admin user.
+
+    ```bash
+    docker exec -it credith_service pnpm seed:prd
+    ```
+
+    This runs the `20260516000000-prd-base-data.js` seeder. The default admin account created is:
+
+    | Field | Value |
+    |-------|-------|
+    | Email | `admin@credith.hn` |
+    | Password | `123456` |
+    | Role | OWNER |
+
+    <Warning>
+      Change the default admin password immediately after your first login. The seeded password `123456` is for bootstrapping only and must not be used in a live environment.
+    </Warning>
+  </Step>
+
+  <Step title="Access the Running Application">
+    Once migrations and seeding are complete, Credith is ready:
+
+    | Service | URL | Notes |
+    |---------|-----|-------|
+    | React Frontend | [http://your-host:4173](http://your-host:4173) | Vite preview server serving the production build |
+    | Express API | [http://your-host:3000](http://your-host:3000) | Health check: `GET /` returns `{ "message": "Hello from the backend!" }` |
+    | Swagger UI | Not available | Only enabled when `NODE_ENV=development` |
+
+    To check all three containers are running:
+
+    ```bash
+    docker compose -f docker-compose-prod.yml ps
+    ```
+  </Step>
+</Steps>
+
+## Environment Variables
+
+All environment variables for the production stack are defined in `docker-compose-prod.yml`. Replace the placeholder values — especially `JWT_SECRET`, `DB_PASSWORD`, and any Cloudinary credentials — before deploying to a live server.
+
+### `credith_service` — Express API
+
+| Variable | Value in `docker-compose-prod.yml` | Description |
+|----------|------------------------------------|-------------|
+| `NODE_ENV` | `development` | Set to `production` to disable Swagger UI and enable production-mode logging. |
+| `PORT` | `3000` | Port the Express server listens on inside the container. |
+| `JWT_SECRET` | `visca_barca_visca_catalunya` | **Must be changed.** Secret key used to sign and verify JWT tokens. |
+| `DB_HOST` | `credith_db` | Hostname of the PostgreSQL container (Docker service name). |
+| `DB_PORT` | `5432` | PostgreSQL port. |
+| `DB_NAME` | `credith` | Name of the database. |
+| `DB_USER` | `postgres` | PostgreSQL user. |
+| `DB_PASSWORD` | `123456` | **Must be changed.** PostgreSQL password. Must match `POSTGRES_PASSWORD` on `credith_db`. |
+| `DB_DIALECT` | `postgres` | Sequelize dialect — always `postgres` for this project. |
+| `CORS_ORIGIN` | `http://localhost:4173` | The frontend origin that the API will accept cross-origin requests from. Update to your production domain. |
+
+### `credith_website` — React Frontend (Build Arguments)
+
+| Build Argument | Value in `docker-compose-prod.yml` | Description |
+|----------------|------------------------------------|-------------|
+| `VITE_BASE_ROUTE` | `http://localhost:3000` | Base URL for all API requests made by the frontend. Update to your API's public URL. |
+| `VITE_CLOUDINARY_CLOUD_NAME` | *(commented out)* | Optional. Your Cloudinary cloud name for product image uploads. |
+| `VITE_CLOUDINARY_UPLOAD_PRESET` | *(commented out)* | Optional. Your Cloudinary unsigned upload preset. |
+
+<Warning>
+  Always replace the default `JWT_SECRET` value (`visca_barca_visca_catalunya`) before going live. Any attacker who knows your JWT secret can forge authentication tokens for any user in your system.
+</Warning>
+
+## Docker Services
+
+The production Compose file defines three services that together form the complete Credith stack:
+
+### `credith_db` — PostgreSQL 17
+
+```yaml
+image: postgres:17
+container_name: credith_db
+ports:
+  - 5432:5432
+healthcheck:
+  test: ["CMD-SHELL", "pg_isready -U postgres"]
+  interval: 5s
+  timeout: 5s
+  retries: 10
+```
+
+Runs the official `postgres:17` image. The database is initialized with `POSTGRES_DB=credith`, `POSTGRES_USER=postgres`, and `POSTGRES_PASSWORD=123456`. A `pg_isready` health check gates the startup of all dependent services. Port `5432` is exposed to the host for direct access with tools like `psql` or TablePlus.
+
+### `credith_service` — Express REST API
+
+```yaml
+build:
+  context: ./Service
+  dockerfile: dockerfile
+container_name: credith_service
+ports:
+  - 3000:3000
+depends_on:
+  credith_db:
+    condition: service_healthy
+```
+
+Built from `Service/dockerfile`. The container starts only after `credith_db` reports a healthy status. All business logic, authentication (JWT + bcrypt), CAI validation, invoice generation, and payment plan management live in this service. The API is reachable at port `3000`.
+
+### `credith_website` — React SPA (Vite)
+
+```yaml
+build:
+  context: ./Website
+  dockerfile: dockerfile
+  args:
+    VITE_BASE_ROUTE: http://localhost:3000
+container_name: credith_website
+ports:
+  - 4173:4173
+depends_on:
+  - credith_service
+```
+
+Built from `Website/dockerfile`. During the Docker build, Vite compiles the React application with `VITE_BASE_ROUTE` and any Cloudinary arguments baked into the static bundle. The compiled assets are served via `vite preview` on port `4173`. Because Vite environment variables are inlined at build time, you must rebuild the image whenever `VITE_BASE_ROUTE` or the Cloudinary settings change.
+
+## Cloudinary Integration (Optional)
+
+Credith supports uploading product images to [Cloudinary](https://cloudinary.com/). This is entirely optional — products without images display a placeholder in the frontend. To enable image uploads:
+
+1. Create a free Cloudinary account and note your **Cloud Name**.
+2. In the Cloudinary dashboard, create an **unsigned upload preset** and note its name.
+3. In `docker-compose-prod.yml`, uncomment and populate the two build args for the `credith_website` service:
+
+```yaml
+credith_website:
+  build:
+    context: ./Website
+    dockerfile: dockerfile
+    args:
+      VITE_BASE_ROUTE: http://your-api-domain:3000
+      VITE_CLOUDINARY_CLOUD_NAME: your_cloud_name
+      VITE_CLOUDINARY_UPLOAD_PRESET: your_upload_preset
+```
+
+4. Rebuild the website image for the new environment variables to take effect:
+
+```bash
+docker compose -f docker-compose-prod.yml up --build -d credith_website
+```
+
+Because `VITE_CLOUDINARY_CLOUD_NAME` and `VITE_CLOUDINARY_UPLOAD_PRESET` are Vite build-time variables, they are embedded directly into the compiled JavaScript bundle. Changing them requires a full image rebuild — they cannot be injected at runtime.
+
+<Note>
+  Swagger UI (`/api-docs`) is only enabled when `NODE_ENV=development`. In production, set `NODE_ENV=production` in the `credith_service` environment block to disable the interactive API explorer and reduce the attack surface.
+</Note>

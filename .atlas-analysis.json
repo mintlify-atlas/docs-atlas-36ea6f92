@@ -1,0 +1,138 @@
+{
+  "projectType": "saas",
+  "projectName": "Credith",
+  "projectDescription": "Credith is a full-stack point-of-sale and credit management platform for retail businesses, featuring invoicing, installment payment plans, inventory tracking, and role-based multi-store management.",
+  "theme": "luma",
+  "primaryColor": "#1e8e3e",
+  "lightColor": "#35b36b",
+  "darkColor": "#156a2e",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "deployment"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/roles-permissions",
+              "concepts/cai-invoicing",
+              "concepts/payment-plans",
+              "concepts/inventory"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/authentication",
+              "guides/creating-a-sale",
+              "guides/managing-stores",
+              "guides/reports"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/authentication"
+            ]
+          },
+          {
+            "group": "Users & Access",
+            "pages": [
+              "api-reference/users",
+              "api-reference/roles"
+            ]
+          },
+          {
+            "group": "Organization",
+            "pages": [
+              "api-reference/companies",
+              "api-reference/stores",
+              "api-reference/checkout-machines"
+            ]
+          },
+          {
+            "group": "Catalog",
+            "pages": [
+              "api-reference/products",
+              "api-reference/categories",
+              "api-reference/store-inventory"
+            ]
+          },
+          {
+            "group": "Billing & Payments",
+            "pages": [
+              "api-reference/cai",
+              "api-reference/bills",
+              "api-reference/payment-plans",
+              "api-reference/clients"
+            ]
+          },
+          {
+            "group": "Analytics",
+            "pages": [
+              "api-reference/reports"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Role-based access control (Owner, Admin, Employee)",
+    "Multi-store and multi-company management",
+    "CAI-compliant tax invoice generation (Honduras fiscal system)",
+    "Cash and installment (credit) payment plans",
+    "Real-time inventory tracking per store",
+    "Sales and checkout machine management",
+    "Dashboard with revenue charts and KPI reporting",
+    "JWT authentication via HTTP cookies",
+    "Swagger UI for API exploration (development mode)",
+    "Docker Compose setup for local and production deployment"
+  ],
+  "publicApiSurface": [
+    "POST /api/users — Register user & receive JWT",
+    "POST /api/users/login — Login & receive JWT",
+    "GET /api/users — List users (paginated)",
+    "GET /api/companies — List companies",
+    "POST /api/companies — Create company",
+    "GET /api/stores — List stores",
+    "POST /api/stores — Create store",
+    "GET /api/products — List products",
+    "POST /api/products — Create product",
+    "GET /api/categories — List categories",
+    "POST /api/categories — Create category",
+    "GET /api/cais — List CAIs",
+    "POST /api/cais — Create CAI",
+    "GET /api/cai-ranges — List CAI ranges",
+    "POST /api/cai-ranges — Create CAI range",
+    "GET /api/checkout-machines — List checkout machines",
+    "POST /api/checkout-machines — Create checkout machine",
+    "GET /api/clients — List clients",
+    "POST /api/clients — Create client",
+    "POST /api/bills — Create invoice (cash or installment)",
+    "POST /api/payment-plan/:planId/pay — Make a payment",
+    "POST /api/payment-plan/:planId/recalculate — Recalculate installment plan",
+    "GET /api/payment-plan/pending-payments — List pending/overdue payments",
+    "GET /api/payment-plan/:dni — Get payment plan by client DNI",
+    "GET /api/reports/products — Product performance report",
+    "GET /api/reports/stores — Store monthly report",
+    "GET /api/reports/companies — Company monthly report",
+    "GET /api/store-inventory — List store inventory",
+    "GET /api/roles — List roles",
+    "POST /api/roles/associate-user — Assign role to user"
+  ]
+}

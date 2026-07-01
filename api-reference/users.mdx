@@ -1,0 +1,490 @@
+---
+title: "Users API — Register, List, and Manage User Accounts"
+sidebarTitle: "Users"
+description: "REST endpoints to register users, retrieve user lists, activate or deactivate accounts, and update passwords. Registration returns a JWT session cookie."
+---
+
+The Users API is the entry point for account management in Credith. It covers the full lifecycle of a user account: creating a new user tied to a store and checkout machine, authenticating with credentials, managing active/inactive status, and updating passwords. Every user is assigned a role (`Employee` by default) at registration time, and their identity is carried across requests via two HTTP cookies set during login or signup.
+
+<Note>
+  Registering a new user via `POST /api/users` also authenticates that user — a JWT `token` cookie and a `session` cookie are **not** set on registration. Login via `POST /api/users/login` is required after registration to obtain session cookies. There is no separate email-verification or activation step for new accounts.
+</Note>
+
+<Warning>
+  The deactivate (`PUT /api/users/desactivate/:id`) and activate (`PUT /api/users/activate/:id`) endpoints require a valid JWT auth cookie. Requests without an authenticated session will be rejected with `401 Unauthorized`.
+</Warning>
+
+---
+
+## GET /api/users
+
+Retrieves a paginated list of all users. The `password` field is always excluded from every response. Each user object includes their assigned roles via the `users_roles` junction table.
+
+**Authentication:** Not required
+
+### Query Parameters
+
+<ParamField query="limit" type="number" default="10">
+  Maximum number of user records to return per page. Defaults to `10`.
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of records to skip before starting to collect the result set. Defaults to `0`. Use together with `limit` for pagination.
+</ParamField>
+
+### Response
+
+**`200 OK`**
+
+<ResponseField name="total" type="number">
+  Total count of users in the database (before pagination).
+</ResponseField>
+
+<ResponseField name="data" type="array">
+  Array of user objects for the current page.
+
+  <Expandable title="User object fields">
+    <ResponseField name="userId" type="string (UUID)">
+      Unique identifier for the user.
+    </ResponseField>
+    <ResponseField name="first_name" type="string">
+      User's first (given) name.
+    </ResponseField>
+    <ResponseField name="second_name" type="string">
+      User's second (middle) name.
+    </ResponseField>
+    <ResponseField name="first_last_name" type="string">
+      User's first surname.
+    </ResponseField>
+    <ResponseField name="second_last_name" type="string">
+      User's second surname.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      User's email address. Unique across the platform.
+    </ResponseField>
+    <ResponseField name="isActive" type="boolean">
+      Whether the user account is currently active. Defaults to `true`.
+    </ResponseField>
+    <ResponseField name="storeId" type="string (UUID)">
+      The store this user belongs to.
+    </ResponseField>
+    <ResponseField name="checkoutMachineId" type="string (UUID)">
+      The checkout machine assigned to this user.
+    </ResponseField>
+    <ResponseField name="createdAt" type="string (ISO 8601)">
+      Timestamp of account creation.
+    </ResponseField>
+    <ResponseField name="updatedAt" type="string (ISO 8601)">
+      Timestamp of last update.
+    </ResponseField>
+    <ResponseField name="roles" type="array">
+      List of roles assigned to the user. Each role includes `roleId`, `name`, and `description`. Junction table attributes are hidden.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+{
+  "total": 2,
+  "data": [
+    {
+      "userId": "a1b2c3d4-0000-4000-8000-111111111111",
+      "first_name": "Maria",
+      "second_name": "Elena",
+      "first_last_name": "Torres",
+      "second_last_name": "Ruiz",
+      "email": "maria.torres@credith.com",
+      "isActive": true,
+      "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+      "checkoutMachineId": "c99900aa-1111-4000-8000-222222222222",
+      "createdAt": "2024-09-01T10:00:00.000Z",
+      "updatedAt": "2024-09-01T10:00:00.000Z",
+      "roles": [
+        {
+          "roleId": "d44400bb-2222-4000-8000-333333333333",
+          "name": "Employee",
+          "description": "Standard POS operator"
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## GET /api/users/:id
+
+Returns a single user record identified by UUID. The `password` field is excluded, and the full role list for that user is included.
+
+**Authentication:** Not required
+
+### Path Parameters
+
+<ParamField path="id" type="string (UUID)" required>
+  The unique identifier (`userId`) of the user to retrieve.
+</ParamField>
+
+### Response
+
+**`200 OK`** — Returns the user object (same structure as items in `GET /api/users`).
+
+**`404 Not Found`**
+
+```json
+{ "message": "Usuario no encontrado" }
+```
+
+```json Example Response
+{
+  "userId": "a1b2c3d4-0000-4000-8000-111111111111",
+  "first_name": "Carlos",
+  "second_name": "Alberto",
+  "first_last_name": "Mendez",
+  "second_last_name": "Paz",
+  "email": "carlos.mendez@credith.com",
+  "isActive": true,
+  "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+  "checkoutMachineId": "c99900aa-1111-4000-8000-222222222222",
+  "createdAt": "2024-10-15T08:30:00.000Z",
+  "updatedAt": "2024-10-15T08:30:00.000Z",
+  "roles": [
+    {
+      "roleId": "d44400bb-2222-4000-8000-333333333333",
+      "name": "Admin",
+      "description": "Store administrator"
+    }
+  ]
+}
+```
+
+---
+
+## GET /api/users/employees
+
+Returns a paginated list of all users, identical in structure to `GET /api/users`. Roles are included via the junction table.
+
+**Authentication:** Not required
+
+### Query Parameters
+
+<ParamField query="limit" type="number" default="10">
+  Maximum number of records to return per page.
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of records to skip for pagination.
+</ParamField>
+
+### Response
+
+**`200 OK`** — Same shape as `GET /api/users`: `{ total, data[] }`.
+
+---
+
+## POST /api/users
+
+Registers a new user account. The new user is linked to a specific store and checkout machine, and is automatically assigned a role. If the optional `role` field is omitted or is anything other than `Admin` or `Employee`, the role defaults to `Employee`. `Owner` cannot be assigned at registration time.
+
+**Authentication:** Not required
+
+<Tip>
+  After a successful registration, use `POST /api/users/login` with the same email and password to obtain the session cookies needed for authenticated endpoints.
+</Tip>
+
+### Request Body
+
+<ParamField body="first_name" type="string" required>
+  User's first (given) name. Cannot be blank.
+</ParamField>
+
+<ParamField body="second_name" type="string" required>
+  User's second (middle) name. Cannot be blank.
+</ParamField>
+
+<ParamField body="first_last_name" type="string" required>
+  User's first surname. Cannot be blank.
+</ParamField>
+
+<ParamField body="second_last_name" type="string" required>
+  User's second surname. Cannot be blank.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  A valid, unique email address. Returns `400` if already registered.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Must be at least **6 characters** long. Stored as a bcrypt hash.
+</ParamField>
+
+<ParamField body="storeId" type="string (UUID)" required>
+  UUID of an existing store to associate the user with. Returns `404` if not found.
+</ParamField>
+
+<ParamField body="checkoutMachineId" type="string (UUID)" required>
+  UUID of an existing checkout machine to assign to the user. Returns `404` if not found.
+</ParamField>
+
+<ParamField body="role" type="string">
+  Optional desired role. Accepted values: `Admin`, `Employee`. Any other value (or omission) defaults to `Employee`. `Owner` cannot be self-assigned at registration.
+</ParamField>
+
+### Response
+
+**`201 Created`**
+
+<ResponseField name="message" type="string">
+  Confirmation message: `"Usuario registrado existosamente"`.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The newly created user object, including `userId` and all stored fields. The `password` field **is included** in this one-time creation response — store it securely and do not log it.
+</ResponseField>
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | Missing/blank required field, password shorter than 6 chars, or duplicate email |
+| `404`  | `storeId` or `checkoutMachineId` does not match an existing record |
+| `404`  | The resolved role name does not exist in the `roles` table |
+| `500`  | Internal server error |
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://your-api.com/api/users \
+  -H "Content-Type: application/json" \
+  -d '{
+    "first_name": "Laura",
+    "second_name": "Isabel",
+    "first_last_name": "Gomez",
+    "second_last_name": "Vega",
+    "email": "laura.gomez@credith.com",
+    "password": "securePass1",
+    "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+    "checkoutMachineId": "c99900aa-1111-4000-8000-222222222222",
+    "role": "Employee"
+  }'
+```
+
+```json Response (201)
+{
+  "message": "Usuario registrado existosamente",
+  "user": {
+    "userId": "f1e2d3c4-aaaa-4000-8000-bbbbbbbbbbbb",
+    "first_name": "Laura",
+    "second_name": "Isabel",
+    "first_last_name": "Gomez",
+    "second_last_name": "Vega",
+    "email": "laura.gomez@credith.com",
+    "isActive": true,
+    "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
+    "checkoutMachineId": "c99900aa-1111-4000-8000-222222222222",
+    "createdAt": "2025-01-10T14:22:00.000Z",
+    "updatedAt": "2025-01-10T14:22:00.000Z"
+  }
+}
+```
+
+</CodeGroup>
+
+---
+
+## POST /api/users/login
+
+Authenticates a user with email and password. On success, sets two cookies:
+
+| Cookie | `HttpOnly` | Contents |
+|--------|------------|---------|
+| `token` | ✅ Yes | Signed JWT. Sent automatically by the browser on subsequent requests. |
+| `session` | ❌ No | JSON-encoded session data readable by the frontend (userId, name, role, store, checkout machine). |
+
+Both cookies share the same `maxAge` (default: 2 hours, controlled by `COOKIE_LIFETIME_HOURS` env var).
+
+**Authentication:** Not required
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  The user's registered email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The user's plain-text password to verify against the stored bcrypt hash.
+</ParamField>
+
+### Response
+
+**`200 OK`** — Cookies are set. Body:
+
+```json
+{ "message": "Inicio de sesión exitoso" }
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | Missing email or password in request body |
+| `404`  | Email not found, or password does not match (both return the same generic message to prevent enumeration) |
+| `500`  | Internal server error |
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://your-api.com/api/users/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{
+    "email": "laura.gomez@credith.com",
+    "password": "securePass1"
+  }'
+```
+
+```json Response (200)
+{ "message": "Inicio de sesión exitoso" }
+```
+
+</CodeGroup>
+
+---
+
+## POST /api/users/logout
+
+Clears both the `token` (HttpOnly JWT) and `session` cookies from the client. No request body is needed. This endpoint does not require authentication — calling it when already logged out is a no-op.
+
+**Authentication:** Not required (but typically called from an authenticated session)
+
+### Response
+
+**`200 OK`**
+
+```json
+{ "message": "Sesión cerrada" }
+```
+
+```bash cURL Example
+curl -X POST https://your-api.com/api/users/logout \
+  -b cookies.txt \
+  -c cookies.txt
+```
+
+---
+
+## PUT /api/users/update-password
+
+Updates the authenticated user's password. The user is identified from the JWT payload (`req.user.id`) — the path carries no `:id` parameter. Both the current password (to confirm identity) and the desired new password must be provided.
+
+**Authentication:** ✅ Required — valid `token` cookie
+
+### Request Body
+
+<ParamField body="currentPassword" type="string" required>
+  The user's current plain-text password. Must match the stored bcrypt hash or the request is rejected with `400`.
+</ParamField>
+
+<ParamField body="newPassword" type="string" required>
+  The desired new password. Must be at least **6 characters** long. Stored as a new bcrypt hash.
+</ParamField>
+
+### Response
+
+**`200 OK`**
+
+```json
+{ "message": "Contraseña actualizada correctamente" }
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | `newPassword` is fewer than 6 characters |
+| `400`  | `currentPassword` does not match the stored hash |
+| `401`  | Missing or invalid `token` cookie |
+| `404`  | Authenticated user ID not found in the database |
+| `500`  | Internal server error |
+
+```bash cURL Example
+curl -X PUT https://your-api.com/api/users/update-password \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "currentPassword": "securePass1",
+    "newPassword": "newSecurePass99"
+  }'
+```
+
+---
+
+## PUT /api/users/desactivate/:id
+
+Sets the `isActive` flag to `false` on the specified user account. The user record is **not** deleted — it remains in the database and can be reactivated. Attempting to deactivate an already-inactive user returns a `400` error.
+
+**Authentication:** ✅ Required — valid `token` cookie
+
+### Path Parameters
+
+<ParamField path="id" type="string (UUID)" required>
+  The `userId` of the user to deactivate.
+</ParamField>
+
+### Response
+
+**`200 OK`**
+
+```json
+{ "message": "Usuario desactivado" }
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | User is already inactive |
+| `401`  | Missing or invalid `token` cookie |
+| `404`  | No user found for the given UUID |
+| `500`  | Internal server error |
+
+```bash cURL Example
+curl -X PUT https://your-api.com/api/users/desactivate/a1b2c3d4-0000-4000-8000-111111111111 \
+  -b cookies.txt
+```
+
+---
+
+## PUT /api/users/activate/:id
+
+Sets the `isActive` flag back to `true` on a previously deactivated user. Attempting to activate an already-active user returns a `400` error.
+
+**Authentication:** ✅ Required — valid `token` cookie
+
+### Path Parameters
+
+<ParamField path="id" type="string (UUID)" required>
+  The `userId` of the user to reactivate.
+</ParamField>
+
+### Response
+
+**`200 OK`**
+
+```json
+{ "message": "Usuario activado" }
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | User is already active |
+| `401`  | Missing or invalid `token` cookie |
+| `404`  | No user found for the given UUID |
+| `500`  | Internal server error |
+
+```bash cURL Example
+curl -X PUT https://your-api.com/api/users/activate/a1b2c3d4-0000-4000-8000-111111111111 \
+  -b cookies.txt
+```

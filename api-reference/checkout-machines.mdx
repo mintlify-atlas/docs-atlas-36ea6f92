@@ -1,0 +1,437 @@
+---
+title: "Checkout Machines API — Register and Manage POS Terminals"
+sidebarTitle: "Checkout Machines"
+description: "Create, update, and manage point-of-sale checkout machines. Each machine is assigned to a cashier user and must be active to process sales."
+---
+
+Checkout machines are the point-of-sale (POS) terminals through which cashiers process invoices in Credith. Each machine has a numeric identifier, a human-readable name, and belongs to a specific store. Users (cashiers) are linked to a machine through the `associate-user` endpoint — a user may only be assigned to one machine at a time. A cashier **must** have an active checkout machine assigned before any bill can be created; the billing system reads the machine number and name directly onto the invoice at the time of sale.
+
+<Note>
+  A cashier user must have a checkout machine assigned to their account before they can process any bill. The machine's `machineNumber` and `name` are stamped onto the invoice at creation time and cannot be changed retroactively.
+</Note>
+
+---
+
+## Endpoints overview
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/checkout-machines` | List machines (paginated, includes user and store data) |
+| `GET` | `/api/checkout-machines/:id` | Get a single machine by UUID |
+| `POST` | `/api/checkout-machines` | Create a new checkout machine |
+| `PUT` | `/api/checkout-machines/:id` | Update machine fields |
+| `PUT` | `/api/checkout-machines/activate/:id` | Activate a machine |
+| `PUT` | `/api/checkout-machines/deactivate/:id` | Deactivate a machine |
+| `PUT` | `/api/checkout-machines/:id/associate-user` | Associate a user to a machine |
+| `DELETE` | `/api/checkout-machines/:id` | Permanently delete a machine |
+
+---
+
+## List checkout machines
+
+```http
+GET /api/checkout-machines
+```
+
+Returns a paginated list of checkout machines ordered by `machineNumber` ascending. Each record includes the associated `users` array and the nested `store` (with its parent `company` name).
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of records to return per page.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip before starting the page. Use with `limit` for cursor-style pagination.
+</ParamField>
+
+### Response `200`
+
+```json
+{
+  "total": 1,
+  "data": [
+    {
+      "checkoutMachineId": "cm000001-0000-4000-8000-000000000001",
+      "machineNumber": 1,
+      "name": "Caja Principal",
+      "isActive": true,
+      "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "users": [
+        {
+          "userId": "u1u1u1u1-0000-4000-8000-000000000001",
+          "first_name": "Carlos",
+          "second_name": "José",
+          "first_last_name": "Reyes",
+          "second_last_name": "Mejía",
+          "email": "carlos@servicredit.com"
+        }
+      ],
+      "store": {
+        "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+        "storeNumber": 1,
+        "address": "Col. Palmira, Tegucigalpa",
+        "company": { "name": "ServiCredit" }
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Get checkout machine by ID
+
+```http
+GET /api/checkout-machines/:id
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the checkout machine to retrieve.
+</ParamField>
+
+Returns the full machine object with the same `users` and `store` inclusions as the list endpoint.
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Machine object returned. |
+| `404` | No machine found with the given ID. |
+
+---
+
+## Create a checkout machine
+
+```http
+POST /api/checkout-machines
+```
+
+<Warning>
+  Each user can only be assigned to **one** active checkout machine. Attempting to associate a user who already has a `checkoutMachineId` set on their account — whether via creation or the associate-user endpoint — will return a **400 Bad Request** error. Ensure the user is unlinked from any existing machine before reassigning.
+</Warning>
+
+### Request body
+
+<ParamField body="machineNumber" type="integer" required>
+  Numeric identifier for this POS terminal (e.g., `1`, `2`, `3`). Must be an integer — decimal values return a `400` error.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Human-readable label for the machine, such as `"Caja Principal"` or `"Terminal 2"`. Maximum 50 characters. Cannot be blank.
+</ParamField>
+
+<ParamField body="storeId" type="string" required>
+  UUID of the store this machine belongs to. The store must already exist.
+</ParamField>
+
+### Example request
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://your-domain.com/api/checkout-machines \
+  -H "Content-Type: application/json" \
+  -d '{
+    "machineNumber": 1,
+    "name": "Caja Principal",
+    "storeId": "a1b2c3d4-0000-4000-8000-000000000001"
+  }'
+```
+
+```json Body
+{
+  "machineNumber": 1,
+  "name": "Caja Principal",
+  "storeId": "a1b2c3d4-0000-4000-8000-000000000001"
+}
+```
+
+</CodeGroup>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `201` | Machine created successfully. Returns the new machine object. |
+| `400` | Validation failed — missing/invalid `machineNumber`, blank `name`, or blank `storeId`. |
+| `404` | Referenced store not found. |
+| `500` | Unexpected server error. |
+
+```json
+{
+  "message": "Maquina de checkout creada correctamente",
+  "checkoutMachine": {
+    "checkoutMachineId": "cm000001-0000-4000-8000-000000000001",
+    "machineNumber": 1,
+    "name": "Caja Principal",
+    "isActive": true,
+    "storeId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "createdAt": "2024-06-01T15:00:00.000Z",
+    "updatedAt": "2024-06-01T15:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Update a checkout machine
+
+```http
+PUT /api/checkout-machines/:id
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the machine to update.
+</ParamField>
+
+All body fields are optional. Only the fields you include will be changed.
+
+<ParamField body="machineNumber" type="integer">
+  New machine number. Must be a valid integer if provided; cannot be set to empty.
+</ParamField>
+
+<ParamField body="name" type="string">
+  New display name for the machine. Cannot be set to a blank string.
+</ParamField>
+
+<ParamField body="storeId" type="string">
+  UUID of the store to reassign this machine to. The target store must exist.
+</ParamField>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Machine updated successfully. |
+| `400` | Validation failed — invalid `machineNumber` or blank `name`. |
+| `404` | Machine or referenced store not found. |
+
+```json
+{
+  "message": "Maquina de checkout actualizada correctamente",
+  "checkoutMachine": {
+    "checkoutMachineId": "cm000001-0000-4000-8000-000000000001",
+    "machineNumber": 2,
+    "name": "Caja Secundaria",
+    "isActive": true,
+    "storeId": "a1b2c3d4-0000-4000-8000-000000000001"
+  }
+}
+```
+
+---
+
+## Activate a checkout machine
+
+```http
+PUT /api/checkout-machines/activate/:id
+```
+
+Sets `isActive` to `true`. Returns `400` if the machine is already active.
+
+<ParamField path="id" type="string" required>
+  UUID of the machine to activate.
+</ParamField>
+
+| Status | Description |
+|--------|-------------|
+| `200` | Machine activated successfully. |
+| `400` | Machine is already active. |
+| `404` | Machine not found. |
+
+```json
+{ "message": "Maquina de checkout activada correctamente" }
+```
+
+---
+
+## Deactivate a checkout machine
+
+```http
+PUT /api/checkout-machines/deactivate/:id
+```
+
+Sets `isActive` to `false`. Returns `400` if the machine is already inactive.
+
+<ParamField path="id" type="string" required>
+  UUID of the machine to deactivate.
+</ParamField>
+
+| Status | Description |
+|--------|-------------|
+| `200` | Machine deactivated successfully. |
+| `400` | Machine is already inactive. |
+| `404` | Machine not found. |
+
+```json
+{ "message": "Maquina de checkout desactivada correctamente" }
+```
+
+---
+
+## Associate a user to a checkout machine
+
+```http
+PUT /api/checkout-machines/:id/associate-user
+```
+
+Links a user to a checkout machine by updating the `checkoutMachineId` field on the user record. This is the mechanism that grants a cashier the ability to process bills on that terminal.
+
+<Warning>
+  If the user already has a different machine assigned (`user.checkoutMachineId` is set to a different machine's ID), the request returns **400 Bad Request**. A user who is already correctly associated with the same machine ID will not trigger this error — the operation is idempotent in that case.
+</Warning>
+
+<ParamField path="id" type="string" required>
+  UUID of the checkout machine to associate the user with.
+</ParamField>
+
+<ParamField body="userId" type="string" required>
+  UUID of the user to link to this machine.
+</ParamField>
+
+### Example request
+
+<CodeGroup>
+
+```bash cURL
+curl -X PUT https://your-domain.com/api/checkout-machines/cm000001-0000-4000-8000-000000000001/associate-user \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "u1u1u1u1-0000-4000-8000-000000000001"
+  }'
+```
+
+```json Body
+{
+  "userId": "u1u1u1u1-0000-4000-8000-000000000001"
+}
+```
+
+</CodeGroup>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | User associated to the machine successfully. |
+| `400` | `userId` is missing/blank, or the user already has a different machine assigned. |
+| `404` | Checkout machine or user not found. |
+
+```json
+{
+  "message": "Usuario asociado a la maquina de checkout correctamente",
+  "checkoutMachine": {
+    "checkoutMachineId": "cm000001-0000-4000-8000-000000000001",
+    "machineNumber": 1,
+    "name": "Caja Principal",
+    "isActive": true,
+    "storeId": "a1b2c3d4-0000-4000-8000-000000000001"
+  }
+}
+```
+
+---
+
+## Delete a checkout machine
+
+```http
+DELETE /api/checkout-machines/:id
+```
+
+<ParamField path="id" type="string" required>
+  UUID of the machine to delete.
+</ParamField>
+
+<Warning>
+  This is a **hard delete** — the machine record is permanently removed. Any users currently associated with this machine will have a dangling `checkoutMachineId` reference. Disassociate all users before deleting a machine.
+</Warning>
+
+### Responses
+
+| Status | Description |
+|--------|-------------|
+| `200` | Machine deleted successfully. |
+| `404` | Machine not found. |
+
+```json
+{ "message": "Maquina de checkout eliminada correctamente" }
+```
+
+---
+
+## Checkout machine object reference
+
+<ResponseField name="checkoutMachineId" type="string">
+  UUID v4 primary key, auto-generated on creation.
+</ResponseField>
+
+<ResponseField name="machineNumber" type="integer">
+  Numeric identifier for the POS terminal. Indexed in the database for fast lookup.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Human-readable label for the machine. Maximum 50 characters.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Whether the machine is currently active. Defaults to `true`. Only active machines can be used for billing.
+</ResponseField>
+
+<ResponseField name="storeId" type="string">
+  UUID of the store this machine is installed in.
+</ResponseField>
+
+<ResponseField name="users" type="array">
+  Users currently assigned to this machine (populated on GET responses).
+
+  <Expandable title="user fields">
+    <ResponseField name="userId" type="string">
+      UUID of the assigned user.
+    </ResponseField>
+    <ResponseField name="first_name" type="string">
+      User's first name.
+    </ResponseField>
+    <ResponseField name="second_name" type="string">
+      User's second name.
+    </ResponseField>
+    <ResponseField name="first_last_name" type="string">
+      User's first surname.
+    </ResponseField>
+    <ResponseField name="second_last_name" type="string">
+      User's second surname.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      User's email address.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="store" type="object">
+  Embedded store object included in GET responses.
+
+  <Expandable title="store fields">
+    <ResponseField name="storeId" type="string">
+      UUID of the store.
+    </ResponseField>
+    <ResponseField name="storeNumber" type="integer">
+      Numeric store identifier.
+    </ResponseField>
+    <ResponseField name="address" type="string | null">
+      Store's physical address.
+    </ResponseField>
+    <ResponseField name="company" type="object">
+      Parent company of the store — only the `name` field is included.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of record creation.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the most recent update.
+</ResponseField>
+
+<Tip>
+  When a bill is created, the system reads `machineNumber` and `name` from the assigned cashier's checkout machine and stamps them directly onto the bill record (`checkout_machine_number`, `checkout_machine_name`). These values are immutable after the bill is saved, so machine renames do not affect historical invoices.
+</Tip>

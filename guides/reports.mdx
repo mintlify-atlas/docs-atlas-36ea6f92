@@ -1,0 +1,262 @@
+---
+title: "Generate Sales and Revenue Reports"
+sidebarTitle: "Reports"
+description: "Use Credith's reports API to view product performance, store monthly revenue, and company-level aggregated revenue — all filterable by date, store, and company."
+---
+
+Credith exposes three dedicated report endpoints that give business owners a detailed view of operational performance across their retail network. The **Products** report shows per-product sales volume, current inventory, and gross/net gain broken down by store. The **Stores** report provides a monthly snapshot of a single branch — including revenue and staff roster. The **Companies** report aggregates monthly gross and net gain across all active stores under a company. All three endpoints run optimised raw SQL queries against the `cd` PostgreSQL schema and are accessible only to users with the OWNER role (and ADMIN for the stores report).
+
+<Note>
+  In the Credith React frontend (`ManagerReportsPage.jsx`), report controls are only rendered for users whose `session` cookie contains `role: "OWNER"`. Non-owner roles are redirected away from the reports section entirely. Ensure the authenticated user was assigned the `Owner` role via `POST /api/roles/associate-user` before using these endpoints.
+</Note>
+
+## Report Types
+
+<Tabs>
+  <Tab title="Products">
+    ### `GET /api/reports/products`
+
+    Returns product-level performance for a given company, optionally scoped to a specific store and/or calendar month. Results are paginated and sorted alphabetically by product name.
+
+    **Query Parameters**
+
+    | Parameter | Required | Description |
+    |-----------|----------|-------------|
+    | `companyId` | ✅ | UUID of the company to scope the report to |
+    | `storeId` | — | UUID of a specific store; filters both sales and inventory data |
+    | `month` | — | Month to filter. Accepts `YYYY-MM` format (e.g. `2025-06`) or a numeric `1–12` alongside `year` |
+    | `year` | — | Required when `month` is passed as a number (e.g. `month=6&year=2025`) |
+    | `limit` | — | Max products to return (default `10`, max `100`) |
+    | `offset` | — | Pagination offset (default `0`) |
+
+    When neither `month` nor `year` is provided, the report returns **historical** data (all time). The `period.type` field in the response will be `"historical"`.
+
+    **Example Request**
+
+    ```bash
+    curl "http://localhost:3000/api/reports/products?\
+    companyId=a11111e5-9ae8-4597-b95e-9889028f0001\
+    &month=2025-06\
+    &limit=10\
+    &offset=0" \
+      -b cookies.txt
+    ```
+
+    **Example Response**
+
+    ```json
+    {
+      "period": {
+        "type": "month",
+        "year": 2025,
+        "month": 6,
+        "startDate": "2025-06-01",
+        "endDate": "2025-07-01"
+      },
+      "filters": {
+        "companyId": "a11111e5-9ae8-4597-b95e-9889028f0001",
+        "storeId": null
+      },
+      "pagination": {
+        "limit": 10,
+        "offset": 0
+      },
+      "products": [
+        {
+          "productId": "e11111e5-9ae8-4597-b95e-9889028f4444",
+          "name": "Refrigeradora 14 pies",
+          "quantitySold": 3,
+          "inStock": 7,
+          "grossGain": 4500.00,
+          "netGain": 3870.00,
+          "stores": [
+            {
+              "storeId": "b22222e5-9ae8-4597-b95e-9889028f0002",
+              "address": 101,
+              "quantitySold": 2,
+              "inStock": 5,
+              "grossGain": 3000.00,
+              "netGain": 2580.00
+            },
+            {
+              "storeId": "b33333e5-9ae8-4597-b95e-9889028f0003",
+              "address": 202,
+              "quantitySold": 1,
+              "inStock": 2,
+              "grossGain": 1500.00,
+              "netGain": 1290.00
+            }
+          ]
+        }
+      ]
+    }
+    ```
+
+    Each product entry contains:
+    - `quantitySold` — total units sold during the period across all stores (or the filtered store)
+    - `inStock` — current inventory units available
+    - `grossGain` — `(sellPrice − buyPrice) × quantity` summed over all matching bill details
+    - `netGain` — `(lineTotal − buyPrice × quantity)` summed, accounting for line-item discounts
+    - `stores` — per-store breakdown of the same metrics
+  </Tab>
+
+  <Tab title="Stores">
+    ### `GET /api/reports/stores`
+
+    Returns the monthly operational summary for a single store: gross and net revenue, operating status, and the full employee list. Defaults to the **current calendar month** when no `month`/`year` is provided.
+
+    **Query Parameters**
+
+    | Parameter | Required | Description |
+    |-----------|----------|-------------|
+    | `storeId` | ✅ | UUID of the store to report on |
+    | `month` | — | Month to filter (`YYYY-MM` or numeric `1–12`). Defaults to current month |
+    | `year` | — | Required when `month` is a number |
+
+    **Example Request**
+
+    ```bash
+    curl "http://localhost:3000/api/reports/stores?\
+    storeId=b22222e5-9ae8-4597-b95e-9889028f0002\
+    &month=2025-06" \
+      -b cookies.txt
+    ```
+
+    **Example Response**
+
+    ```json
+    {
+      "period": {
+        "type": "month",
+        "year": 2025,
+        "month": 6,
+        "startDate": "2025-06-01",
+        "endDate": "2025-07-01"
+      },
+      "filters": {
+        "storeId": "b22222e5-9ae8-4597-b95e-9889028f0002"
+      },
+      "store": {
+        "storeId": "b22222e5-9ae8-4597-b95e-9889028f0002",
+        "address": 101,
+        "isOperating": true,
+        "monthlyGrossGain": 18500.00,
+        "monthlyNetGain": 15950.00,
+        "employees": [
+          {
+            "userId": "d44444e5-9ae8-4597-b95e-9889028f0004",
+            "fullName": "Pedro Luis Martínez Cruz",
+            "email": "pedro.martinez@servicredit.hn",
+            "isActive": true
+          }
+        ]
+      }
+    }
+    ```
+
+    The `employees` array lists all users whose `store_id` matches the requested store. Employee `fullName` is assembled server-side by joining `first_name`, `second_name`, `first_last_name`, and `second_last_name`.
+
+    **Date-range variant**
+
+    For charting or day-level granularity use `GET /api/reports/stores/range`, which requires `storeId`, `startDate` (`YYYY-MM-DD`), and `endDate` (`YYYY-MM-DD`). It returns a daily array of `{ date, grossGain, netGain }` objects — the same data series used to power the Recharts `AreaChart` on the dashboard home page, which plots the last 6 months of revenue.
+
+    ```bash
+    curl "http://localhost:3000/api/reports/stores/range?\
+    storeId=b22222e5-9ae8-4597-b95e-9889028f0002\
+    &startDate=2025-01-01\
+    &endDate=2025-06-30" \
+      -b cookies.txt
+    ```
+  </Tab>
+
+  <Tab title="Companies">
+    ### `GET /api/reports/companies`
+
+    Returns the monthly consolidated revenue for a company, aggregating gross and net gain across **all active stores**. Inactive stores are excluded automatically (`activeOnly = true` filter in the query).
+
+    **Query Parameters**
+
+    | Parameter | Required | Description |
+    |-----------|----------|-------------|
+    | `companyId` | ✅ | UUID of the company to report on |
+    | `month` | — | Month to filter (`YYYY-MM` or numeric `1–12`). Defaults to current month |
+    | `year` | — | Required when `month` is a number |
+
+    **Example Request**
+
+    ```bash
+    curl "http://localhost:3000/api/reports/companies?\
+    companyId=a11111e5-9ae8-4597-b95e-9889028f0001\
+    &month=2025-06" \
+      -b cookies.txt
+    ```
+
+    **Example Response**
+
+    ```json
+    {
+      "period": {
+        "type": "month",
+        "year": 2025,
+        "month": 6,
+        "startDate": "2025-06-01",
+        "endDate": "2025-07-01"
+      },
+      "filters": {
+        "companyId": "a11111e5-9ae8-4597-b95e-9889028f0001"
+      },
+      "company": {
+        "companyId": "a11111e5-9ae8-4597-b95e-9889028f0001",
+        "name": "ServiCredit Honduras",
+        "rtn": "08011999123456",
+        "email": "contacto@servicredit.hn",
+        "totalMonthlyGrossGain": 42000.00,
+        "totalMonthlyNetGain": 36150.00,
+        "stores": [
+          {
+            "storeId": "b22222e5-9ae8-4597-b95e-9889028f0002",
+            "address": 101,
+            "isOperating": true,
+            "monthlyGrossGain": 18500.00,
+            "monthlyNetGain": 15950.00
+          },
+          {
+            "storeId": "b33333e5-9ae8-4597-b95e-9889028f0003",
+            "address": 202,
+            "isOperating": true,
+            "monthlyGrossGain": 23500.00,
+            "monthlyNetGain": 20200.00
+          }
+        ]
+      }
+    }
+    ```
+
+    `totalMonthlyGrossGain` and `totalMonthlyNetGain` are the sum of `monthlyGrossGain` / `monthlyNetGain` across all active stores. The frontend's `ManagerReportsPage` displays these values in the summary stat cards alongside the individual store table.
+  </Tab>
+</Tabs>
+
+## Exporting Reports
+
+The `ManagerReportsPage` in the React frontend provides a **Exportar CSV** button for each report section. The export is entirely client-side — the page calls `downloadCsv()` which converts the in-memory report JSON into CSV rows and triggers a browser download without any additional API call.
+
+| Report | CSV filename pattern |
+|--------|---------------------|
+| Company | `company-report-{name}.csv` |
+| Store | `store-report-{storeId}.csv` |
+| Products | `product-report.csv` |
+
+## Dashboard Revenue Charts
+
+The `DashboardHomePage` uses the `GET /api/reports/stores/range` endpoint to power a Recharts `AreaChart` that visualises the last 6 months of revenue for the current store. The frontend computes the `startDate` as 6 months before today and `endDate` as today, passes the authenticated user's `storeId` from the `session` cookie, and maps the returned daily `{ date, grossGain, netGain }` array directly into the chart `data` prop. This gives store admins an at-a-glance revenue trend without navigating to the full reports page.
+
+## Role Requirements
+
+| Endpoint | Required role |
+|----------|--------------|
+| `GET /api/reports/products` | OWNER |
+| `GET /api/reports/stores` | OWNER or ADMIN |
+| `GET /api/reports/stores/range` | OWNER or ADMIN |
+| `GET /api/reports/companies` | OWNER |
+
+All report endpoints are protected by both `authMiddleware` (requires a valid JWT cookie) and `roleMiddleware` (checks `req.user.role` against the allowed roles). A request from an ADMIN user to `GET /api/reports/companies` will be rejected with `403`.

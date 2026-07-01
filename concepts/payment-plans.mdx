@@ -1,0 +1,187 @@
+---
+title: "Cash and Installment Payment Plans"
+sidebarTitle: "Payment Plans"
+description: "Credith supports two payment types: CASH (immediate full payment) and INSTALLMENT (monthly credit plans with interest tracking and overdue detection)."
+---
+
+Credith is designed for Honduran retail businesses that extend credit to their customers. Every bill created in the system is tied to a payment plan — either a one-shot cash payment or a multi-month installment plan that generates individual monthly obligations, tracks partial payments, and can be recalculated as customer circumstances change. The payment plan engine is the core of Credith's credit management capability.
+
+## Payment Types
+
+Payment type is stored as a PostgreSQL ENUM on the `bills` table and defined in `Service/models/dbEnums.js`:
+
+```js
+const BillTypes = Object.freeze({
+  CASH:        'CASH',
+  INSTALLMENT: 'INSTALLMENT',
+})
+```
+
+When a bill is created via `POST /api/bills`, the `paymentType` field determines which plan creation path is taken inside the transaction.
+
+## CASH Payment
+
+For a cash sale, Credith creates a `bill_payment_plans` record that is immediately marked `PAYED`. The initial payment amount is recorded, and no monthly installments are generated:
+
+```js
+// From Service/controllers/bill.js — createCashPaymentPlan()
+await BillsPaymentPlans.create({
+  initialPayment: paymentData.payment,
+  totalToPay:     Math.max(0, billTotal - paymentData.payment),
+  payedAmount:    paymentData.payment,
+  interestRate:   paymentData.interestRate || 0,
+  status:         PaymentStatus.PAYED,
+  billId:         billId
+}, { transaction })
+```
+
+Cash plans require no further action — they serve as a complete audit record of the transaction.
+
+## INSTALLMENT Payment — `BillPaymentPlan`
+
+For credit sales, a `bill_payment_plans` record is created with a full breakdown of the repayment terms.
+
+### Plan Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `bill_payment_plan_id` | UUID | Primary key |
+| `total_to_pay` | DECIMAL(18,6) | The total amount owed under this plan (bill total after discount + ISV). |
+| `initial_payment` | DECIMAL(18,6) | Down payment collected at the time of sale. Defaults to `0`. |
+| `payed_amount` | DECIMAL(18,6) | Running total of all payments received so far. |
+| `starting_date` | DATE | The date from which monthly installment deadlines are calculated. |
+| `months_to_pay` | INTEGER | Number of monthly installments. |
+| `payment_day` | SMALLINT | Day of month (1–31) on which each installment is due. Clamped to the last day of shorter months. |
+| `interest_rate` | SMALLINT | Annual interest rate percentage. Defaults to `0`. |
+| `last_payment_time` | DATE | Timestamp of the most recent payment received. |
+| `status` | ENUM | `PENDING`, `OVERDUE`, or `PAYED`. |
+
+### Monthly Payments
+
+Each installment plan generates a set of `monthly_payments` rows — one per month — at the moment the bill is created:
+
+| Field | Type | Description |
+|---|---|---|
+| `monthly_payment_id` | UUID | Primary key |
+| `payment_amount` | DECIMAL(18,6) | The base installment amount for this month (total ÷ months, last month absorbs rounding remainder). |
+| `interest_to_pay` | DECIMAL(18,6) | Any interest accrued on this installment. Starts at `0`. |
+| `payment_deadline` | DATE | The due date for this installment. |
+| `payed_amount` | DECIMAL(18,6) | How much has been paid toward this installment so far. |
+| `is_payed` | BOOLEAN | `true` when `payed_amount` ≥ `payment_amount + interest_to_pay`. |
+
+```js
+// From Service/models/entities/monthlyPayment.js
+MonthlyPayment.init({
+  monthlyPaymentId: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
+  paymentAmount:    { type: DataTypes.DECIMAL(18, 6), allowNull: false },
+  interestToPay:    { type: DataTypes.DECIMAL(18, 6) },
+  paymentDeadline:  { type: DataTypes.DATE },
+  payedAmount:      { type: DataTypes.DECIMAL(18, 6), defaultValue: 0 },
+  isPayed:          { type: DataTypes.BOOLEAN, defaultValue: false }
+}, { schema: 'cd', paranoid: true, underscored: true })
+```
+
+### One Active Plan Per Client
+
+A client can only hold **one** active (`PENDING` or `OVERDUE`) installment plan at a time. Attempting to create a second bill with `paymentType: INSTALLMENT` for the same client will fail:
+
+```js
+// From Service/controllers/bill.js — createInstallmentPaymentPlan()
+const activePlan = await BillsPaymentPlans.findOne({
+  include: [{ model: Clients, as: 'client', required: true, where: { clientId: customer.clientId } }],
+  where: { status: { [Op.in]: [PaymentStatus.PENDING, PaymentStatus.OVERDUE] } },
+  transaction
+})
+
+if (activePlan) {
+  throw { status: 400, message: 'El cliente ya tiene un plan de pago activo' }
+}
+```
+
+## Installment Plan Lifecycle
+
+<Steps>
+  <Step title="Bill Created (PENDING)">
+    When a bill is posted with `paymentType: INSTALLMENT`, a `BillPaymentPlan` is created with `status: PENDING` and N `MonthlyPayments` are generated with evenly-distributed `paymentAmount` values. The initial down payment (if any) is recorded in `initial_payment` and added to `payed_amount`.
+  </Step>
+  <Step title="Payments Applied">
+    Payments are applied via `POST /api/payment-plan/:planId/pay`. Each payment is distributed across monthly installments in chronological order starting from the specified `month` offset. Each installment's `payed_amount` is updated, and it is marked `is_payed = true` when fully covered. The plan's `payed_amount` is recalculated as the sum of the initial payment plus all monthly `payed_amount` values.
+  </Step>
+  <Step title="Overdue Detection">
+    The `GET /api/payment-plan/pending-payments` endpoint queries for all monthly payments where `is_payed = false`, the plan status is `PENDING` or `OVERDUE`, and the `payment_deadline` falls before the end of the lookahead window (current month + 3 months ahead). The response includes a calculated `amountToPay` field: `payment_amount + interest_to_pay - payed_amount`.
+  </Step>
+  <Step title="Plan Fully Paid (PAYED)">
+    A plan transitions to `status: PAYED` when all `MonthlyPayments` have `is_payed = true`, or when `payed_amount ≥ total_to_pay`. This is evaluated atomically inside the payment transaction:
+
+    ```js
+    status: mps.every(mp => mp.isPayed) ||
+             Number(plan.totalToPay) <= healedPayedAmount
+               ? PaymentStatus.PAYED
+               : plan.status
+    ```
+  </Step>
+</Steps>
+
+## API Operations
+
+### Apply a Payment
+
+```http
+POST /api/payment-plan/:planId/pay
+Content-Type: application/json
+
+{
+  "amount": 500.00,
+  "month": 0
+}
+```
+
+The `month` field is a zero-based index into the sorted list of monthly installments. Payments cascade forward — if `amount` exceeds one installment, the remainder rolls over to the next unpaid month.
+
+### Recalculate the Plan
+
+```http
+POST /api/payment-plan/:planId/recalculate
+Content-Type: application/json
+
+{
+  "newMonths": 6
+}
+```
+
+Destroys all existing `MonthlyPayments` for the plan and regenerates them based on the remaining balance (`total_to_pay - payed_amount`) spread across `newMonths`. Payment deadlines are recalculated from the current date using the plan's configured `payment_day`.
+
+<Note>
+Recalculation is blocked in two cases:
+
+1. **Plan is already `PAYED`** — `"El plan de pago ya ha sido cubierto!"`
+2. **Any open installment has `interest_to_pay > 0`** — `"No se puede recalcular por meses pendientes"`
+
+Additionally, `newMonths` cannot be greater than the original `months_to_pay` — the plan cannot be extended beyond its original term, only compressed.
+</Note>
+
+### List Pending and Overdue Payments
+
+```http
+GET /api/payment-plan/pending-payments
+```
+
+Returns all unpaid installments across all clients where the `payment_deadline` falls within the current month + 3 months ahead, and the plan is still `PENDING` or `OVERDUE`. Results include client name, DNI, and phone for easy follow-up.
+
+Non-owner users (ADMIN role) see only payments linked to bills from their assigned store.
+
+### Get Plan by Client DNI
+
+```http
+GET /api/payment-plan/:dni
+```
+
+Returns the most recent active payment plan for a client identified by their national ID (`dni`), including all associated `monthlyPayments`.
+
+## Payment Plan Status Reference
+
+| Status | Meaning |
+|---|---|
+| `PENDING` | Plan is active and installments are due but not yet late (or not yet evaluated as overdue). |
+| `OVERDUE` | One or more installments have passed their `payment_deadline` without full payment. |
+| `PAYED` | All installments have been fully paid — the plan is closed. |
