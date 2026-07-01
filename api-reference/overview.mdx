@@ -1,7 +1,7 @@
 ---
-title: "Credith REST API Overview and Base Configuration"
+title: "Credith REST API: Overview, Base URL, and Configuration"
 sidebarTitle: "Overview"
-description: "The Credith API is a RESTful JSON service running on Express. All endpoints are prefixed with /api and return JSON responses with standard HTTP status codes."
+description: "The Credith API is a RESTful JSON service built on Express. All endpoints are prefixed with /api and return JSON with standard HTTP status codes."
 ---
 
 The Credith API is a RESTful service built with **Express.js** and backed by **PostgreSQL** (via Sequelize ORM). It serves as the data layer for the Credith point-of-sale and credit management platform, handling everything from user authentication and product inventory to CAI-based invoicing and installment payment plans. All routes are mounted under the `/api` prefix, all request bodies are JSON, and all responses are JSON.
@@ -113,7 +113,6 @@ The following middleware is registered in `app.js` and applies to all (or nearly
 | `cookie-parser` | Global | Parses the `Cookie` header and populates `req.cookies`, including the `token` and `session` cookies used for authentication |
 | `express.json()` | Global | Parses incoming `application/json` request bodies and populates `req.body` |
 | `LoggerMiddleware` | Global (non-test) | Custom middleware that logs the HTTP method, URL, timestamp, response status code, and total duration in milliseconds. Skipped when `NODE_ENV=test`. Swagger asset routes are silently ignored |
-| `authMiddleware` | 3 user routes only | Reads `req.cookies.token`, calls `verifyToken()`, and attaches the decoded payload to `req.user`. Returns `401` if the token is missing or invalid |
 
 ```javascript
 // app.js — middleware registration order

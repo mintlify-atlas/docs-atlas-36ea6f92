@@ -4,15 +4,11 @@ sidebarTitle: "Reports"
 description: "Query product performance, store monthly revenue, and company-level aggregated financials. All report endpoints accept company and store filters."
 ---
 
-Credith exposes three analytical report endpoints that cover different scopes of the business: product-level performance across a company, monthly revenue and staffing data for a single store, and aggregated financials rolled up to the company level. All three operate against the `cd` schema using raw PostgreSQL queries with CTEs, and all return pre-computed `grossGain` and `netGain` figures calculated from `sell_price - buy_price` margins. A fourth endpoint, `GET /api/reports/stores/range`, returns day-by-day gross/net gain for a store over an arbitrary date range.
+Credith exposes four analytical report endpoints that cover different scopes of the business: product-level performance across a company, a day-by-day store gain series over a custom date range, a monthly revenue and staffing summary for a single store, and aggregated financials rolled up to the company level. All four operate against the `cd` schema using raw PostgreSQL queries with CTEs, and all return pre-computed `grossGain` and `netGain` figures calculated from `sell_price - buy_price` margins.
 
 <Note>
-  In the Credith frontend, all four report endpoints are restricted to users holding the `OWNER` role (or `ADMIN` for store-scoped views). The API-level `roleMiddleware` enforces this — requests from `EMPLOYEE`-role users are rejected with `403`. Ensure the JWT in the `Authorization` header belongs to a user with the appropriate role.
+  All four report endpoints are restricted by role. `GET /api/reports/products` and `GET /api/reports/companies` require the `OWNER` role. `GET /api/reports/stores` and `GET /api/reports/stores/range` accept either `OWNER` or `ADMIN`. The API-level `roleMiddleware` enforces this — requests from `EMPLOYEE`-role users are rejected with `403`. Ensure the JWT in the `Authorization` header belongs to a user with the appropriate role.
 </Note>
-
-<Info>
-  The **DashboardHomePage** in the Credith frontend aggregates the last 6 months of data by calling `GET /api/reports/stores/range` (with `startDate` = 6 months ago and `endDate` = today) alongside `GET /api/reports/companies` for the current month. These two calls together populate the line chart and KPI cards shown on login.
-</Info>
 
 ---
 
@@ -84,7 +80,7 @@ curl -X GET "https://your-domain.com/api/reports/products?companyId=cc001122-9ae
       "stores": [
         {
           "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
-          "address": "101",
+          "address": 101,
           "quantitySold": 5,
           "inStock": 7,
           "grossGain": 1500.00,
@@ -189,7 +185,7 @@ curl -X GET "https://your-domain.com/api/reports/stores?storeId=d55555e5-9ae8-45
   },
   "store": {
     "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
-    "address": "101",
+    "address": 101,
     "isOperating": true,
     "monthlyGrossGain": 8400.00,
     "monthlyNetGain": 7980.00,
@@ -213,7 +209,7 @@ curl -X GET "https://your-domain.com/api/reports/stores?storeId=d55555e5-9ae8-45
 
   <Expandable title="store fields">
     <ResponseField name="storeId" type="string (UUID)">UUID of the store.</ResponseField>
-    <ResponseField name="address" type="string">Store address / store number.</ResponseField>
+    <ResponseField name="address" type="integer">Store address number (integer, e.g. `101`).</ResponseField>
     <ResponseField name="isOperating" type="boolean">Whether `is_active` is `true` for this store.</ResponseField>
     <ResponseField name="monthlyGrossGain" type="number">
       Gross gain for the period: `SUM((sellPrice - buyPrice) × quantity)`.
@@ -328,14 +324,14 @@ curl -X GET "https://your-domain.com/api/reports/companies?companyId=cc001122-9a
     "stores": [
       {
         "storeId": "d55555e5-9ae8-4597-b95e-9889028f3333",
-        "address": "101",
+        "address": 101,
         "isOperating": true,
         "monthlyGrossGain": 8400.00,
         "monthlyNetGain": 7980.00
       },
       {
         "storeId": "d66666e6-9ae8-4597-b95e-9889028f4444",
-        "address": "202",
+        "address": 202,
         "isOperating": true,
         "monthlyGrossGain": 16200.00,
         "monthlyNetGain": 15390.00
@@ -366,7 +362,7 @@ curl -X GET "https://your-domain.com/api/reports/companies?companyId=cc001122-9a
       Per-store breakdown. Only stores where `is_active = true` are included.
       <Expandable title="store summary fields">
         <ResponseField name="storeId" type="string (UUID)">UUID of the store.</ResponseField>
-        <ResponseField name="address" type="string">Store address / number.</ResponseField>
+        <ResponseField name="address" type="integer">Store address number (integer, e.g. `101`).</ResponseField>
         <ResponseField name="isOperating" type="boolean">Always `true` for this endpoint (only active stores are included).</ResponseField>
         <ResponseField name="monthlyGrossGain" type="number">Store's gross gain for the period.</ResponseField>
         <ResponseField name="monthlyNetGain" type="number">Store's net gain for the period.</ResponseField>

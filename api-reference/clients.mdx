@@ -237,7 +237,7 @@ Permanently (hard) deletes a client record. This operation does not cascade to p
 </ResponseField>
 
 <ResponseField name="isActive" type="boolean">
-  Whether the client account is considered active. Defaults to `true`. Can be toggled but there is no dedicated activate/deactivate endpoint — update via `PUT /api/clients/:id`.
+  Whether the client account is considered active. Defaults to `true`. This field is managed internally and is not accepted as an input by any write endpoint — there is no API route to activate or deactivate a client.
 </ResponseField>
 
 <ResponseField name="createdAt" type="string (date-time)">

@@ -1,18 +1,18 @@
 ---
-title: "API Authentication with JWT Cookies"
+title: "Credith API Authentication: JWT Cookies and Sessions"
 sidebarTitle: "Authentication"
-description: "Credith authenticates requests using JWT tokens stored in HTTP cookies. Register or log in to receive a token, then send cookies with subsequent requests."
+description: "Credith authenticates requests using JWT tokens stored in HTTP cookies. Log in to receive a signed token cookie; protected routes verify it automatically."
 ---
 
-Credith authenticates users with **JWT tokens stored in HTTP cookies** — no `Authorization: Bearer` header is needed. When you register or log in, the server calls `generateToken()` and writes the signed JWT directly into a `token` cookie on the response. From that point on, your HTTP client automatically includes the cookie on every subsequent request to the same origin. The server-side `authMiddleware` reads `req.cookies.token`, verifies it with `verifyToken()`, and attaches the decoded payload to `req.user` for the duration of that request lifecycle.
+Credith authenticates users with **JWT tokens stored in HTTP cookies** — no `Authorization: Bearer` header is needed. When you log in, the server calls `generateToken()` and writes the signed JWT directly into a `token` cookie on the response. From that point on, your HTTP client automatically includes the cookie on every subsequent request to the same origin. The server-side `authMiddleware` reads `req.cookies.token`, verifies it with `verifyToken()`, and attaches the decoded payload to `req.user` for the duration of that request lifecycle.
 
 ## Obtaining a Token
 
-There are two ways to get a JWT cookie: registering a new user account or logging in with an existing one.
+To receive a JWT cookie you must log in with an existing account via `POST /api/users/login`. Registering a new user (`POST /api/users`) creates the account but does **not** set any cookie — you must call the login endpoint afterwards.
 
 ### Register — `POST /api/users`
 
-Creates a new user record and returns a `201` response. The server validates all required fields, hashes the password with bcrypt, persists the user, and assigns the requested role (defaults to `Employee`).
+Creates a new user record and returns a `201` response. No cookie is set. The server validates all required fields, hashes the password with bcrypt, persists the user, and assigns the requested role (defaults to `Employee`).
 
 <ParamField body="first_name" type="string" required>
   User's first given name. Cannot be blank.

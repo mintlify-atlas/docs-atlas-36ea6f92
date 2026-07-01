@@ -106,7 +106,7 @@ POST /api/checkout-machines
 ```
 
 <Warning>
-  Each user can only be assigned to **one** active checkout machine. Attempting to associate a user who already has a `checkoutMachineId` set on their account — whether via creation or the associate-user endpoint — will return a **400 Bad Request** error. Ensure the user is unlinked from any existing machine before reassigning.
+  Each user can only be assigned to **one** checkout machine at a time. To link a user to a machine, use the `PUT /api/checkout-machines/:id/associate-user` endpoint after creation. Attempting to associate a user who already has a different `checkoutMachineId` set on their account will return a **400 Bad Request** error. Unlink the user from their current machine before reassigning.
 </Warning>
 
 ### Request body

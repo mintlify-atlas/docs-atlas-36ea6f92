@@ -1,7 +1,7 @@
 ---
-title: "Set Up Companies, Stores, and Staff"
+title: "Set Up and Manage Stores, Companies, and Staff in Credith"
 sidebarTitle: "Managing Stores"
-description: "Create a company, add stores under it, assign users to stores, configure checkout machines, and control active status — all through Credith's organization APIs."
+description: "Set up companies, add stores, assign staff and checkout machines, and control active status through Credith's organization and store management APIs."
 ---
 
 Credith organises its data around a three-level hierarchy: a **company** (empresa) owns one or more **stores** (tiendas/sucursales), and each store has **users** (staff) and **checkout machines** (cajas de facturación) assigned to it. A user belongs to exactly one store and one checkout machine, while the company record holds the legal identity — `name` and RTN (Registro Tributario Nacional) — that is stamped on every invoice at bill time. Getting this hierarchy right before processing sales is essential, as the bill controller validates each layer during invoice creation.
@@ -15,6 +15,7 @@ Credith organises its data around a three-level hierarchy: a **company** (empres
     ```bash
     curl -X POST http://localhost:3000/api/companies \
       -H "Content-Type: application/json" \
+      -b cookies.txt \
       -d '{
         "name": "ServiCredit Honduras",
         "rtn": "08011999123456",
@@ -196,5 +197,5 @@ curl -X PUT http://localhost:3000/api/companies/a11111e5-9ae8-4597-b95e-9889028f
 ```
 
 <Tip>
-  If you are building an admin panel that needs to assign users to stores from a management interface, use `POST /api/admin-stores` — this endpoint is designed specifically to associate existing users with stores outside of the registration flow.
+  If you need to view which store each admin is assigned to, use `GET /api/admin-stores` (OWNER role required) — it returns all admin users with their currently assigned store. To unassign a store from an admin, call `DELETE /api/admin-stores/:userId/store`, which sets the user's `storeId` to `null`. Store assignment is set at user creation time via `POST /api/users`.
 </Tip>

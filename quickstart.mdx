@@ -1,10 +1,10 @@
 ---
-title: "Get Started with Credith in Under 5 Minutes"
+title: "Quickstart: Run Credith Locally with Docker Compose"
 sidebarTitle: "Quickstart"
-description: "Learn how to run Credith locally with Docker Compose, apply migrations, seed demo data, and make your first API call in a few steps."
+description: "Spin up all three Credith services in Docker, seed the database, and verify the API and frontend are working with your first real request."
 ---
 
-This guide takes you from zero to a fully running Credith instance on your local machine. By the end you will have the PostgreSQL database, the Express API, and the React frontend all running in Docker — plus demo data loaded and your first API call verified. The only thing you need to start is Docker and Node.js already installed.
+This guide takes you from zero to a fully running Credith instance on your local machine. By the end you will have the PostgreSQL database, the Express API, and the React frontend all running in Docker — plus demo data loaded and your first API call verified. The only thing you need to start is Docker already installed.
 
 ## Steps
 
@@ -13,7 +13,7 @@ This guide takes you from zero to a fully running Credith instance on your local
     Make sure the following tools are available on your machine before proceeding:
 
     | Tool | Minimum Version | Purpose |
-    |------|-----------------|---------|
+    |------|-----------------|---------| 
     | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | Latest stable | Runs all three services (DB, API, frontend) |
     | Node.js | 18+ | Required to run `pnpm` CLI commands outside of Docker |
     | pnpm | 11+ | Package manager used by both `Service` and `Website` workspaces |
@@ -41,16 +41,16 @@ This guide takes you from zero to a fully running Credith instance on your local
   </Step>
 
   <Step title="Configure Environment Variables">
-    The development Docker Compose file (`docker-compose.yml`) includes sensible defaults for local development. If you want to override any value, create a `.env` file in the project root or edit the `environment` block in `docker-compose.yml` directly.
+    The full-stack Docker Compose file (`docker-compose-prod.yml`) includes sensible defaults for local development. If you want to override any value, edit the `environment` block in `docker-compose-prod.yml` directly.
 
     <Note>
-      The `.gitignore` excludes `.env` files from version control. Never commit secrets to the repository.
+      Never commit secrets to the repository. If you copy values to a `.env` file, confirm it is listed in `.gitignore`.
     </Note>
 
     The full set of environment variables consumed by the `credith_service` container:
 
-    | Variable | Default (dev) | Description |
-    |----------|---------------|-------------|
+    | Variable | Default | Description |
+    |----------|---------|-------------|
     | `NODE_ENV` | `development` | Controls Swagger UI availability and logging |
     | `PORT` | `3000` | Port the Express server binds to |
     | `JWT_SECRET` | `visca_barca_visca_catalunya` | Secret used to sign JWT tokens |
@@ -64,8 +64,8 @@ This guide takes you from zero to a fully running Credith instance on your local
 
     The `credith_website` container takes one required build argument:
 
-    | Variable | Default (dev) | Description |
-    |----------|---------------|-------------|
+    | Build Argument | Default | Description |
+    |----------------|---------|-------------|
     | `VITE_BASE_ROUTE` | `http://localhost:3000` | Base URL the frontend uses for all API requests |
   </Step>
 
@@ -73,12 +73,12 @@ This guide takes you from zero to a fully running Credith instance on your local
     Spin up all three services — the database, the API, and the frontend — with a single command from the project root:
 
     ```bash
-    docker compose up --build
+    docker compose -f docker-compose-prod.yml up --build
     ```
 
     Docker Compose will:
     1. Pull `postgres:17` and start `credith_db` with a health check (`pg_isready`).
-    2. Build the `Service/dockerfile` and start `credith_service` on port `3000` (waits for the DB to be healthy).
+    2. Build the `Service/dockerfile` and start `credith_service` on port `3000` (waits for the DB to be healthy). On first start the container **automatically** runs migrations and the production seeder before launching the API.
     3. Build the `Website/dockerfile` with `VITE_BASE_ROUTE=http://localhost:3000` and start `credith_website` on port `4173`.
 
     Wait until you see output similar to:
@@ -88,42 +88,18 @@ This guide takes you from zero to a fully running Credith instance on your local
     ```
   </Step>
 
-  <Step title="Run Migrations">
-    Once the containers are running, apply all pending Sequelize migrations to create the `cd` schema and all tables. Run this inside the `credith_service` container:
+  <Step title="Load Demo Data (Optional)">
+    The `credith_service` container automatically runs `pnpm migrate` and `pnpm seed:prd` on startup, so the database is already populated with the production baseline (roles, initial company, one store, one checkout machine, five categories, and a default admin account) by the time the API is ready.
 
-    ```bash
-    docker exec -it credith_service pnpm migrate
-    ```
-
-    Alternatively, if you have the `Service` dependencies installed locally and your `.env` is configured, you can run:
-
-    ```bash
-    cd Service
-    pnpm migrate
-    ```
-
-    A successful run prints each migration file name followed by a confirmation message.
-  </Step>
-
-  <Step title="Seed Demo Data">
-    Credith ships with two seeders:
-
-    | Command | Seeder File | What it loads |
-    |---------|-------------|---------------|
-    | `pnpm seed:prd` | `20260516000000-prd-base-data.js` | Three roles (OWNER, ADMIN, EMPLOYEE), the base company *ServiCredith*, one store, one checkout machine, five product categories, and one admin user (`admin@credith.hn` / password `123456`) |
-    | `pnpm seed:dev` | `20260521083057-mock-company-data.js` | Two demo companies, three stores, five users, six products, four categories, active CAIs and ranges, four clients, and 21 bills spanning January–June 2026 with full installment payment plan data |
-
-    For a realistic local environment with charts and reports populated, run the dev seeder:
+    To additionally load a rich set of mock data — two demo companies, three stores, five users, six products, four categories, active CAIs and ranges, four clients, and 21 bills spanning January–June 2026 with full installment payment plan data — run the dev seeder once the service is up:
 
     ```bash
     docker exec -it credith_service pnpm seed:dev
     ```
 
-    For a clean production-like baseline with just the essential roles and a single admin account:
-
-    ```bash
-    docker exec -it credith_service pnpm seed:prd
-    ```
+    <Note>
+      Run `pnpm seed:dev` only once. Executing it a second time will attempt to insert duplicate records and will fail with a unique-constraint error.
+    </Note>
   </Step>
 
   <Step title="Open the App">
@@ -151,16 +127,27 @@ With the service running, verify it and create your first user:
 curl http://localhost:3000/
 ```
 
+```bash Login
+curl -X POST http://localhost:3000/api/users/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@credith.hn",
+    "password": "123456"
+  }'
+```
+
 ```bash Register a New User
 curl -X POST http://localhost:3000/api/users \
   -H "Content-Type: application/json" \
   -d '{
-    "firstName": "Jane",
-    "secondName": "M.",
-    "firstLastName": "Doe",
-    "secondLastName": "Smith",
+    "first_name": "Jane",
+    "second_name": "M.",
+    "first_last_name": "Doe",
+    "second_last_name": "Smith",
     "email": "jane@example.com",
-    "password": "secret123"
+    "password": "secret123",
+    "storeId": "<store-uuid>",
+    "checkoutMachineId": "<machine-uuid>"
   }'
 ```
 
@@ -172,7 +159,9 @@ The health-check returns:
 { "message": "Hello from the backend!" }
 ```
 
-The `POST /api/users` endpoint registers the user, hashes the password with bcrypt, validates that the email is not already taken, and returns a signed JWT token you can use for authenticated requests (e.g., `PUT /api/users/update-password`).
+The `POST /api/users/login` endpoint validates credentials and sets two cookies: an `HttpOnly` cookie containing the signed JWT (used automatically by the browser on subsequent authenticated requests) and a readable `session` cookie with user details and role. Use `POST /api/users/logout` to clear both cookies.
+
+The `POST /api/users` endpoint registers a new user, hashes the password with bcrypt, assigns the `EMPLOYEE` role by default (or `ADMIN` if `role` is provided in the body), and returns the created user object. Field names use **snake_case**: `first_name`, `second_name`, `first_last_name`, `second_last_name`. Both `storeId` and `checkoutMachineId` (UUIDs of existing records) are required.
 
 <Note>
   The Swagger UI at [http://localhost:3000/api-docs](http://localhost:3000/api-docs) is only available when `NODE_ENV=development`. It documents every route in the API with request/response schemas, generated automatically from JSDoc annotations on each route file. This is the fastest way to explore the full API surface.

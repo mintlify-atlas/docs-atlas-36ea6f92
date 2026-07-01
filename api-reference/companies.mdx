@@ -10,6 +10,8 @@ The Companies API is the top level of Credith's organizational hierarchy. Every 
 
 ## Endpoints overview
 
+All company endpoints require a valid `token` cookie and the **Owner** role.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/companies` | List companies (paginated, filterable) |
@@ -21,6 +23,12 @@ The Companies API is the top level of Credith's organizational hierarchy. Every 
 ---
 
 ## List companies
+
+```http
+GET /api/companies
+```
+
+**Authentication:** ✅ Required — `Owner` role
 
 <ParamField query="limit" type="integer" default="10">
   Maximum number of records to return per page.
@@ -37,6 +45,8 @@ The Companies API is the top level of Credith's organizational hierarchy. Every 
 ```http
 GET /api/companies?limit=10&offset=0&filter=servi
 ```
+
+
 
 ### Response `200`
 
@@ -64,6 +74,8 @@ GET /api/companies?limit=10&offset=0&filter=servi
 ```http
 GET /api/companies/:id
 ```
+
+**Authentication:** ✅ Required — `Owner` role
 
 <ParamField path="id" type="string" required>
   UUID of the company to retrieve.
@@ -96,6 +108,8 @@ GET /api/companies/:id
 POST /api/companies
 ```
 
+**Authentication:** ✅ Required — `Owner` role
+
 <Note>
   The `rtn` (Registro Tributario Nacional) must be unique across all companies. Submitting a duplicate RTN returns **400 Bad Request**. The RTN is also validated to be non-empty before any database lookup is performed.
 </Note>
@@ -125,6 +139,7 @@ POST /api/companies
 ```bash cURL
 curl -X POST https://your-domain.com/api/companies \
   -H "Content-Type: application/json" \
+  -b cookies.txt \
   -d '{
     "name": "ServiCredit",
     "rtn": "08011999123456",
@@ -174,6 +189,8 @@ curl -X POST https://your-domain.com/api/companies \
 ```http
 PUT /api/companies/:id
 ```
+
+**Authentication:** ✅ Required — `Owner` role
 
 <ParamField path="id" type="string" required>
   UUID of the company to update.
@@ -227,6 +244,8 @@ All body fields are optional — only the fields you include will be changed.
 ```http
 DELETE /api/companies/:id
 ```
+
+**Authentication:** ✅ Required — `Owner` role
 
 <ParamField path="id" type="string" required>
   UUID of the company to delete.

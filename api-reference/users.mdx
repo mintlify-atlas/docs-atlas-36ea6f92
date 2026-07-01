@@ -1,13 +1,13 @@
 ---
 title: "Users API — Register, List, and Manage User Accounts"
 sidebarTitle: "Users"
-description: "REST endpoints to register users, retrieve user lists, activate or deactivate accounts, and update passwords. Registration returns a JWT session cookie."
+description: "REST endpoints to register users, retrieve user lists, authenticate, activate or deactivate accounts, and update passwords in Credith."
 ---
 
-The Users API is the entry point for account management in Credith. It covers the full lifecycle of a user account: creating a new user tied to a store and checkout machine, authenticating with credentials, managing active/inactive status, and updating passwords. Every user is assigned a role (`Employee` by default) at registration time, and their identity is carried across requests via two HTTP cookies set during login or signup.
+The Users API is the entry point for account management in Credith. It covers the full lifecycle of a user account: creating a new user tied to a store and checkout machine, authenticating with credentials, managing active/inactive status, and updating passwords. Every user is assigned a role (`EMPLOYEE` by default) at registration time, and their identity is carried across requests via two HTTP cookies set during login.
 
 <Note>
-  Registering a new user via `POST /api/users` also authenticates that user — a JWT `token` cookie and a `session` cookie are **not** set on registration. Login via `POST /api/users/login` is required after registration to obtain session cookies. There is no separate email-verification or activation step for new accounts.
+  Registering a new user via `POST /api/users` does **not** set any session cookies. After a successful registration, use `POST /api/users/login` with the same credentials to obtain the `token` and `session` cookies needed for authenticated endpoints. There is no separate email-verification or activation step for new accounts.
 </Note>
 
 <Warning>
@@ -184,7 +184,7 @@ Returns a paginated list of all users, identical in structure to `GET /api/users
 
 ## POST /api/users
 
-Registers a new user account. The new user is linked to a specific store and checkout machine, and is automatically assigned a role. If the optional `role` field is omitted or is anything other than `Admin` or `Employee`, the role defaults to `Employee`. `Owner` cannot be assigned at registration time.
+Registers a new user account. The new user is linked to a specific store and checkout machine, and is automatically assigned a role. If the optional `role` field is omitted or is anything other than `ADMIN` or `EMPLOYEE`, the role defaults to `EMPLOYEE`. `OWNER` cannot be assigned at registration time.
 
 **Authentication:** Not required
 
@@ -227,7 +227,7 @@ Registers a new user account. The new user is linked to a specific store and che
 </ParamField>
 
 <ParamField body="role" type="string">
-  Optional desired role. Accepted values: `Admin`, `Employee`. Any other value (or omission) defaults to `Employee`. `Owner` cannot be self-assigned at registration.
+  Optional desired role. Accepted values: `ADMIN`, `EMPLOYEE`. Any other value (or omission) defaults to `EMPLOYEE`. `OWNER` cannot be self-assigned at registration.
 </ParamField>
 
 ### Response
@@ -265,7 +265,7 @@ curl -X POST https://your-api.com/api/users \
     "password": "securePass1",
     "storeId": "b75438e5-9ae8-4597-b95e-9889028f4737",
     "checkoutMachineId": "c99900aa-1111-4000-8000-222222222222",
-    "role": "Employee"
+    "role": "EMPLOYEE"
   }'
 ```
 

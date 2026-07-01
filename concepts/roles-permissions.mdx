@@ -1,7 +1,7 @@
 ---
-title: "Roles and Permissions in Credith"
+title: "Credith Role-Based Access Control and Permissions Guide"
 sidebarTitle: "Roles & Permissions"
-description: "Credith uses three roles — Owner, Admin, and Employee — to control access to dashboard features, API routes, and store management operations."
+description: "Credith enforces three roles — OWNER, ADMIN, and EMPLOYEE — controlling dashboard menu visibility, API route access, and store-scoped data filtering."
 ---
 
 Credith enforces a role-based access control (RBAC) model across both its Express.js API and its React dashboard. Every authenticated user carries one of three roles — `OWNER`, `ADMIN`, or `EMPLOYEE` — and that role determines which menu items are visible in the sidebar, which API routes can be called, and which store-scoped data is returned. Roles are stored in the database and evaluated at runtime on each request.

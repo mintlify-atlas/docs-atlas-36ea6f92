@@ -1,7 +1,7 @@
 ---
-title: "Generate Sales and Revenue Reports"
+title: "Generate Product, Store, and Company Reports in Credith"
 sidebarTitle: "Reports"
-description: "Use Credith's reports API to view product performance, store monthly revenue, and company-level aggregated revenue — all filterable by date, store, and company."
+description: "Use Credith's reports API to query product performance, store monthly revenue, and company-level gross and net gain, all filterable by month and store."
 ---
 
 Credith exposes three dedicated report endpoints that give business owners a detailed view of operational performance across their retail network. The **Products** report shows per-product sales volume, current inventory, and gross/net gain broken down by store. The **Stores** report provides a monthly snapshot of a single branch — including revenue and staff roster. The **Companies** report aggregates monthly gross and net gain across all active stores under a company. All three endpoints run optimised raw SQL queries against the `cd` PostgreSQL schema and are accessible only to users with the OWNER role (and ADMIN for the stores report).

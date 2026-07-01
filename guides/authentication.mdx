@@ -1,7 +1,7 @@
 ---
-title: "Authenticate Users and Manage Sessions in Credith"
+title: "Authenticate Users and Manage Sessions in Credith POS"
 sidebarTitle: "Authentication"
-description: "Credith uses JWT tokens stored in HTTP-only cookies. Register a user to receive a token, then include the cookie on subsequent authenticated requests."
+description: "Credith uses JWT tokens stored in HTTP-only cookies. Log in to receive a token, then include the cookie on subsequent authenticated requests."
 ---
 
 Credith authenticates every user with a signed JSON Web Token (JWT) issued by the Express backend. On a successful login the server sets two cookies — an `httpOnly` `token` cookie that the browser automatically sends on every subsequent request, and a readable `session` cookie that the React frontend parses to display the user's name and role without making an extra API call. Passwords are hashed with bcrypt (10 salt rounds) before storage, and all token verification happens inside a dedicated middleware that short-circuits unauthorised requests before they reach any controller.
@@ -113,7 +113,7 @@ const res = await fetch(`${baseRoute}${cleanPath}`, {
 
 ## The Auth Middleware
 
-`authMiddleware` is applied selectively — only the three routes listed below require a valid token. The middleware reads `req.cookies.token`, verifies the signature with `verifyToken` (which calls `jwt.verify` against `process.env.JWT_SECRET`), and attaches the decoded payload to `req.user`.
+`authMiddleware` is applied to protected routes across the API. The middleware reads `req.cookies.token`, verifies the signature with `verifyToken` (which calls `jwt.verify` against `process.env.JWT_SECRET`), and attaches the decoded payload to `req.user`.
 
 ```javascript
 // Service/middlewares/authMiddleware.js
@@ -134,7 +134,7 @@ const authMiddleware = (req, res, next) => {
 
 ## Protected Routes
 
-Only three endpoints in the Credith API require authentication:
+The following user-management endpoints require a valid JWT cookie:
 
 | Method | Path | Description |
 |--------|------|-------------|

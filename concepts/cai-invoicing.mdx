@@ -1,7 +1,7 @@
 ---
-title: "CAI-Compliant Tax Invoicing in Credith"
+title: "CAI Tax Invoice Authorization and Compliance in Credith"
 sidebarTitle: "CAI Invoicing"
-description: "CAI (Código de Autorización de Impresión) is Honduras's government-issued invoice authorization system. Credith validates every sale against active CAI ranges."
+description: "Credith validates every sale against an active CAI range issued by SAR, ensuring each invoice number is government-authorized and audit-traceable."
 ---
 
 In Honduras, every business that issues fiscal invoices must obtain a **CAI** (Código de Autorización de Impresión) from the Servicio de Administración de Rentas (SAR). The CAI is a government-issued authorization code that defines the range of invoice numbers a business is permitted to print and the date by which those invoices must be issued. Credith builds CAI compliance directly into the bill creation flow — a sale cannot be posted without a valid, active CAI Range attached to the store, and every generated invoice number is traceable back to the authorizing CAI.
@@ -53,8 +53,7 @@ Each **CAI Range** defines a contiguous sequence of bill numbers authorized unde
 | `cai_range_id` | UUID | Primary key |
 | `min_range` | INTEGER | The first bill number in this authorized sequence. |
 | `max_range` | INTEGER | The last bill number in this authorized sequence. |
-| `current_number` | INTEGER | Offset from `min_range` — how many bills have already been issued. Starts at `0`. |
-| `expiration_date` | DATE | Independent expiry date for this range (from the `schema.md` table definition). |
+| `current_number` | INTEGER | The count of bills already issued under this range. Starts at `0`; the next bill number is calculated as `min_range + current_number`. |
 | `is_active` | BOOLEAN | Whether this range is the active one for its CAI. Only one range can be active per CAI. |
 | `cai_id` | UUID | FK → `cais.cai_id`. |
 
@@ -101,7 +100,7 @@ Similarly, only **one CAI Range** can be active per CAI. Adding a new range via 
 
 ## Atomic Bill Number Increment
 
-During bill creation (`POST /api/bills`), the system acquires a `SELECT ... FOR UPDATE` lock on the active CAI Range row and atomically increments `current_number`:
+During bill creation (`POST /api/bills`), the system acquires a `SELECT ... FOR UPDATE` lock on the active CAI Range row and atomically increments `current_number`. The next bill number is derived as `minRange + currentNumber`:
 
 ```js
 // From Service/controllers/bill.js — postBill()

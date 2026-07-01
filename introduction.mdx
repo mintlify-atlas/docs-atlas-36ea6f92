@@ -31,7 +31,7 @@ Credith is composed of three tiers that work together seamlessly:
 
 - **Express API (Node.js)** — A REST API built on Express 5, secured with JWT authentication and bcrypt password hashing. It exposes routes under `/api` for every resource in the system and integrates Swagger UI for interactive API exploration in development mode. The service runs on port `3000`.
 
-- **PostgreSQL (via Sequelize)** — All data is persisted in a PostgreSQL 17 database. Sequelize ORM manages migrations, seeders, and model definitions. All tables live inside the `cd` schema and use UUID primary keys with soft-delete support (`deleted_at`).
+- **PostgreSQL (via Sequelize)** — All data is persisted in a PostgreSQL 17 database. Sequelize 6 ORM manages migrations, seeders, and model definitions. All tables live inside the `cd` schema and use UUID primary keys with soft-delete support (`deleted_at`).
 
 ```
 ┌─────────────────────┐      HTTP/JSON      ┌──────────────────────┐
@@ -72,6 +72,11 @@ Role assignment is done via `POST /api/roles/associate-user`, and users can hold
 
 Ready to get a local instance running in under five minutes?
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  Clone the repo, start Docker Compose, run migrations, seed demo data, and make your first API call.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, start Docker Compose, run migrations, seed demo data, and make your first API call.
+  </Card>
+  <Card title="Deployment" icon="server" href="/deployment">
+    Take Credith to production with the full three-service Docker Compose stack, environment variable reference, and Cloudinary integration guide.
+  </Card>
+</CardGroup>

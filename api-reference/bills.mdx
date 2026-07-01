@@ -1,7 +1,7 @@
 ---
-title: "Bills API — Create Tax-Compliant Invoices"
+title: "Bills API — Create and Retrieve Tax-Compliant Invoices"
 sidebarTitle: "Bills"
-description: "POST to /api/bills to create an invoice. Credith validates the active CAI range, deducts inventory, and creates a payment plan (cash or installment) in a single transaction."
+description: "Create invoices in Credith. The server validates the active CAI range, deducts inventory, and writes a cash or installment payment plan atomically."
 ---
 
 Bill creation in Credith is a **complex transactional operation** that touches six tables in a single database transaction. The server validates the cashier's checkout machine, resolves the active CAI and CAI Range, formats the SAR-compliant bill number, deducts inventory for every line item, calculates ISV-15 tax, and then creates either a fully-paid cash payment plan or a multi-installment credit plan — all atomically. A failure at any step rolls back the entire transaction, so partial bills are never persisted.

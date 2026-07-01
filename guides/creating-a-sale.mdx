@@ -1,7 +1,7 @@
 ---
-title: "Create an Invoice and Record a Sale"
+title: "Create a Sale and Issue a Honduran Invoice in Credith"
 sidebarTitle: "Creating a Sale"
-description: "Walk through Credith's bill creation flow: configure a CAI range, set up a checkout machine, select products, choose payment type, and POST to /api/bills."
+description: "Walk through Credith's bill creation: configure a CAI range, set up a checkout machine, select products, choose a payment type, and POST to /api/bills."
 ---
 
 In Credith, every sale is recorded as a **factura** (bill) generated through a single transactional `POST /api/bills` request. The server validates the cashier, the active CAI (government-authorized invoice number), store inventory, and — for installment sales — the client's existing payment plan, all inside a single database transaction. A successful call creates the bill record, one or more `bill_details` line items, deducts inventory from `stores_inventories`, increments the CAI range counter, and creates a `bill_payment_plan` with individual `monthly_payments` if the sale is on credit.

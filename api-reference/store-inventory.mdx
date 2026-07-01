@@ -1,7 +1,7 @@
 ---
 title: "Store Inventory API — Track Per-Store Product Stock"
 sidebarTitle: "Store Inventory"
-description: "Query and manage per-store product inventory in Credith. Stock levels automatically decrement when invoices are created and can be updated directly via the inventory API."
+description: "Query and manage per-store inventory in Credith. Manually update stock, monitor low-stock items, and transfer units between stores via the inventory API."
 ---
 
 The Store Inventory API exposes the `stores_inventories` table, which acts as the bridge between products and stores. Every time a product is added to a store — either at product creation time or via the product update endpoint — a row is inserted into `stores_inventories` associating that product with the store and recording its current `inStock` count. Because multiple stores can carry the same product, stock levels are tracked and managed **independently per store**. In addition to the standard read and update operations, the API provides endpoints for querying your own store's inventory, identifying low-stock items before they run out, and transferring units between stores without manual adjustments.

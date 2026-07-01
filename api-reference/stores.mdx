@@ -1,7 +1,7 @@
 ---
 title: "Stores API — Manage Retail Locations Under a Company"
 sidebarTitle: "Stores"
-description: "Create and manage store locations. Each store belongs to a company and can be independently activated or deactivated. Products and users are assigned per store."
+description: "Create and manage store locations in Credith. Each store belongs to a company and can be independently activated or deactivated for billing."
 ---
 
 Stores represent individual physical retail locations operating under a parent company. Every store is linked to exactly one company via `companyId`, carries a unique store number, and an optional free-text address. Stores can be independently activated or deactivated — only active stores can participate in billing transactions and inventory management. Users (admins and employees) are assigned to stores, and each store maintains its own product inventory through the `stores_inventories` junction table.
@@ -18,8 +18,10 @@ Stores represent individual physical retail locations operating under a parent c
 | `PUT` | `/api/stores/:id` | Admin / Owner | Update store fields |
 | `PUT` | `/api/stores/activate/:id` | Admin / Owner | Activate a store |
 | `PUT` | `/api/stores/deactivate/:id` | Admin / Owner | Deactivate a store |
+| `GET` | `/api/admin-stores` | Owner | List admins with their assigned store |
+| `DELETE` | `/api/admin-stores/:userId/store` | Owner | Remove store assignment from an admin |
 
-Read endpoints (`GET`) are public. Write operations require a valid session with an **Admin** or **Owner** role.
+Read store endpoints (`GET /api/stores`, `GET /api/stores/:id`) are public. Write operations require a valid session with an **Admin** or **Owner** role. Admin-store assignment endpoints require the **Owner** role.
 
 ---
 
@@ -277,13 +279,15 @@ Sets `isActive` to `false` for the specified store. Returns `400` if the store i
 
 ## Admin store assignment
 
-Admin users can be assigned to a specific store so they manage that location. The `admin-stores` resource also exposes two utility endpoints restricted to the **Owner** role.
+Admin users can be assigned to a specific store so they manage that location. The `admin-stores` resource exposes two utility endpoints, both restricted to the **Owner** role and requiring a valid `token` cookie.
 
 ### List admins with their assigned store
 
 ```http
 GET /api/admin-stores
 ```
+
+**Authentication:** ✅ Required — `Owner` role
 
 Returns all users who hold the `ADMIN` role, each with their assigned `store` object embedded (or `null` if unassigned).
 
@@ -314,6 +318,8 @@ DELETE /api/admin-stores/:userId/store
 
 Clears the `storeId` field (`NULL`) on the specified user, effectively un-assigning them from their current store.
 
+**Authentication:** ✅ Required — `Owner` role
+
 <ParamField path="userId" type="string" required>
   UUID of the admin user whose store assignment should be removed.
 </ParamField>
@@ -321,6 +327,8 @@ Clears the `storeId` field (`NULL`) on the specified user, effectively un-assign
 | Status | Description |
 |--------|-------------|
 | `200` | Assignment removed successfully. |
+| `401` | Missing or invalid `token` cookie. |
+| `403` | Authenticated user does not have the `Owner` role. |
 | `404` | User not found. |
 
 ```json

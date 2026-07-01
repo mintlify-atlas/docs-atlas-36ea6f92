@@ -1,7 +1,7 @@
 ---
-title: "Per-Store Inventory Tracking"
+title: "Per-Store Inventory Management and Stock Tracking in Credith"
 sidebarTitle: "Inventory"
-description: "Credith tracks product stock per store via the store_inventories table. Stock automatically decrements when a bill is created and can be managed through the inventory API."
+description: "Credith tracks per-store stock in stores_inventories. Units decrement atomically on bill creation and can be adjusted or transferred via the inventory API."
 ---
 
 Credith manages product stock at the per-store level. Rather than tracking a single global quantity for each product, Credith uses a junction table — `stores_inventories` — that links every (store, product) pair to an independent `in_stock` count. This means the same product can have 20 units at one branch and 3 at another, and each store's inventory is managed and reported independently. Stock levels are decremented automatically during bill creation and can be adjusted, transferred, or queried through the inventory API.
@@ -66,7 +66,7 @@ Attempting to sell more units than are currently in stock **will fail at bill cr
 
 ## The `is_active` Flag
 
-Each inventory entry carries an `is_active` boolean flag (added in migration `20260619013813`). This allows store operators to deactivate a product at a specific store without deleting the record or affecting stock at other stores. An inactive inventory entry signals that the product is not currently being sold at that location, even if `in_stock > 0`.
+Each inventory entry carries an `is_active` boolean flag. This allows store operators to deactivate a product at a specific store without deleting the record or affecting stock at other stores. An inactive inventory entry signals that the product is not currently being sold at that location, even if `in_stock > 0`.
 
 ## Products Across Multiple Stores
 
@@ -83,51 +83,53 @@ This architecture allows ownership-level reporting to aggregate or compare stock
 
 ## API Reference
 
-<Accordion title="GET /api/stores/:storeId/inventory — Full store inventory">
-Returns the full product catalog for a specific store, including each product's `in_stock` count from the `stores_inventories` through-table.
+All inventory endpoints are mounted under the `/api/store-inventory` prefix and require authentication via the `authMiddleware` cookie token.
+
+<Accordion title="GET /api/store-inventory/store/:storeId — Full store inventory">
+Returns the full product catalog for a specific store, including each product's `in_stock` count from the `stores_inventories` through-table. Requires `OWNER` role.
 
 ```http
-GET /api/stores/:storeId/inventory
+GET /api/store-inventory/store/:storeId
 ```
 
 Response includes the `Store` record with an embedded `products` array, each product carrying `{ inStock }` from the junction.
 </Accordion>
 
-<Accordion title="GET /api/inventory/my-store — Current user's store inventory">
-Returns inventory for the store assigned to the authenticated user (`req.user.storeId`). Includes `productId`, `name`, `description`, `sellPrice`, `buyPrice`, `imageUrl`, and `minGainPercentage` per product.
+<Accordion title="GET /api/store-inventory/my-store — Current user's store inventory">
+Returns inventory for the store assigned to the authenticated user (`req.user.storeId`). Includes `productId`, `name`, `description`, `sellPrice`, `buyPrice`, `imageUrl`, and `minGainPercentage` per product. Available to all authenticated roles.
 
 ```http
-GET /api/inventory/my-store
+GET /api/store-inventory/my-store
 ```
 
 Returns `{ total, data[] }` where each item includes the product details and `inStock`.
 </Accordion>
 
-<Accordion title="GET /api/inventory — Paginated inventory across all stores">
-Returns all `stores_inventories` records with pagination, including product name/price and store information.
+<Accordion title="GET /api/store-inventory — Paginated inventory across all stores">
+Returns all `stores_inventories` records with pagination, including product name/price and store information. Requires `OWNER` role.
 
 ```http
-GET /api/inventory?limit=10&offset=0
+GET /api/store-inventory?limit=10&offset=0
 ```
 
 Returns `{ total, data[] }`.
 </Accordion>
 
-<Accordion title="GET /api/inventory/product/:productId/store/:storeId — Single product stock">
-Fetch the `stores_inventories` record for a specific product at a specific store.
+<Accordion title="GET /api/store-inventory/:storeId/:productId — Single product stock">
+Fetch the `stores_inventories` record for a specific product at a specific store. Requires `OWNER` role.
 
 ```http
-GET /api/inventory/product/:productId/store/:storeId
+GET /api/store-inventory/:storeId/:productId
 ```
 
 Returns the raw inventory record including `inStock` and `isActive`.
 </Accordion>
 
-<Accordion title="PUT /api/inventory — Update stock level">
-Manually set the `in_stock` count for a (product, store) pair. Useful for corrections after physical stock counts.
+<Accordion title="PATCH /api/store-inventory/stock — Update stock level">
+Manually set the `in_stock` count for a (product, store) pair. Useful for corrections after physical stock counts. Requires `OWNER` or `ADMIN` role.
 
 ```http
-PUT /api/inventory
+PATCH /api/store-inventory/stock
 Content-Type: application/json
 
 {
@@ -140,11 +142,11 @@ Content-Type: application/json
 `stock` must be `≥ 0`. Returns `{ message, stockActual }`.
 </Accordion>
 
-<Accordion title="POST /api/inventory/transfer — Transfer stock between stores">
-Move a quantity of a product from one store to another. If the destination store does not yet have an inventory record for the product, one is created automatically.
+<Accordion title="POST /api/store-inventory/transfer — Transfer stock between stores">
+Move a quantity of a product from one store to another. If the destination store does not yet have an inventory record for the product, one is created automatically. Requires `OWNER` role.
 
 ```http
-POST /api/inventory/transfer
+POST /api/store-inventory/transfer
 Content-Type: application/json
 
 {
@@ -161,11 +163,11 @@ Validation:
 - `quantity` must be `≥ 1`.
 </Accordion>
 
-<Accordion title="GET /api/inventory/low-stock — Items below threshold">
-Returns inventory items whose `in_stock` is at or below a configurable threshold. Useful for reorder alerts.
+<Accordion title="GET /api/store-inventory/low-stock — Items below threshold">
+Returns inventory items whose `in_stock` is at or below a configurable threshold. Useful for reorder alerts. Requires `OWNER` or `ADMIN` role.
 
 ```http
-GET /api/inventory/low-stock?threshold=5
+GET /api/store-inventory/low-stock?threshold=5
 ```
 
 - **OWNER role**: returns low-stock items across all stores belonging to their company.

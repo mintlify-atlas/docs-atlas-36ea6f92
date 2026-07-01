@@ -1,7 +1,7 @@
 ---
-title: "Products API — Manage the Product Catalog"
+title: "Products API — Create, Archive, and Manage Catalog Items"
 sidebarTitle: "Products"
-description: "Create, update, and archive products in Credith. Products can be assigned to multiple stores with independent stock levels and linked to one or more categories."
+description: "Create, update, and soft-delete products in Credith. Assign products to stores with independent stock levels and link them to one or more categories."
 ---
 
 The Products API is the foundation of Credith's point-of-sale catalog. Every item that can be sold at a store must exist as a product record. Products carry pricing data — both cost (`buyPrice`) and sale price (`sellPrice`) — along with an optional minimum gain percentage that can be used to enforce margin rules at checkout. When a product is created, it is immediately registered in a store's inventory with a configurable initial stock count. Archiving a product via `DELETE` performs a **soft-delete**: the record is never physically removed from the database, and it can be fully restored at any time using the recover endpoint.
@@ -129,8 +129,8 @@ Creates a new product and simultaneously registers it in a store's inventory wit
   UUID of the store where the product's initial inventory entry will be created.
 </ParamField>
 
-<ParamField body="description" type="string">
-  A short description of the product. Stored as a string; omitted values are saved as `NULL`.
+<ParamField body="description" type="string" required>
+  A short description of the product. Required by the database (`allowNull: false` on the `description` column). Cannot be omitted.
 </ParamField>
 
 <ParamField body="buyPrice" type="number" default="0">
@@ -371,6 +371,7 @@ Restores a previously archived product. Like the delete endpoint, behavior varie
 | Status | Meaning |
 |--------|---------|
 | `400` | Missing required field, invalid price, mismatched `productId`, or invalid stock value |
+| `401` | Request is not authenticated (missing or invalid session token) |
 | `403` | Role is not permitted to perform the action (e.g., ADMIN attempting a global archive) |
 | `404` | Product, category, store, or inventory record not found |
 | `500` | Unexpected server error |

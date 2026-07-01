@@ -1,5 +1,5 @@
 ---
-title: "Deploy Credith with Docker Compose"
+title: "Deploy Credith in Production Using Docker Compose"
 sidebarTitle: "Deployment"
 description: "Run Credith in production using Docker Compose with three services: PostgreSQL, the Express API, and the React frontend built with Vite."
 ---
@@ -37,24 +37,15 @@ Credith ships with two Docker Compose files: `docker-compose.yml` for local deve
     Expected output: `healthy`
   </Step>
 
-  <Step title="Run Database Migrations">
-    After the stack is up, apply all Sequelize migrations to create the `cd` schema and every table:
+  <Step title="Migrations and Base Data Run Automatically">
+    The `credith_service` container's startup command runs `pnpm migrate` and `pnpm seed:prd` automatically before the API process launches. No manual migration or seeding steps are required on a fresh deployment.
 
-    ```bash
-    docker exec -it credith_service pnpm migrate
-    ```
+    On startup the container will:
+    1. Run `sequelize-cli db:migrate` — creates the `cd` schema and all tables.
+    2. Run the `20260516000000-prd-base-data.js` seeder — inserts the three roles (OWNER, ADMIN, EMPLOYEE), the initial company record, one store, one checkout machine, five product categories, and a default admin user.
+    3. Start the Express server on port `3000`.
 
-    This command runs `sequelize-cli db:migrate` inside the container using the environment variables already configured in `docker-compose-prod.yml`. Migrations are idempotent — running them multiple times is safe.
-  </Step>
-
-  <Step title="Seed Production Base Data">
-    Populate the database with the production baseline: the three roles (OWNER, ADMIN, EMPLOYEE), the initial company record, one store, one checkout machine, five product categories, and a default admin user.
-
-    ```bash
-    docker exec -it credith_service pnpm seed:prd
-    ```
-
-    This runs the `20260516000000-prd-base-data.js` seeder. The default admin account created is:
+    The default admin account seeded is:
 
     | Field | Value |
     |-------|-------|
@@ -68,13 +59,13 @@ Credith ships with two Docker Compose files: `docker-compose.yml` for local deve
   </Step>
 
   <Step title="Access the Running Application">
-    Once migrations and seeding are complete, Credith is ready:
+    Once the `credith_service` container finishes its startup sequence (migrations, seeding, and server launch), Credith is ready:
 
     | Service | URL | Notes |
     |---------|-----|-------|
     | React Frontend | [http://your-host:4173](http://your-host:4173) | Vite preview server serving the production build |
     | Express API | [http://your-host:3000](http://your-host:3000) | Health check: `GET /` returns `{ "message": "Hello from the backend!" }` |
-    | Swagger UI | Not available | Only enabled when `NODE_ENV=development` |
+    | Swagger UI | [http://your-host:3000/api-docs](http://your-host:3000/api-docs) | Available while `NODE_ENV=development`; disable by setting `NODE_ENV=production` |
 
     To check all three containers are running:
 
@@ -149,7 +140,7 @@ depends_on:
     condition: service_healthy
 ```
 
-Built from `Service/dockerfile`. The container starts only after `credith_db` reports a healthy status. All business logic, authentication (JWT + bcrypt), CAI validation, invoice generation, and payment plan management live in this service. The API is reachable at port `3000`.
+Built from `Service/dockerfile`. The container starts only after `credith_db` reports a healthy status. On first launch the container's startup command automatically runs `pnpm migrate` (creates all tables) and `pnpm seed:prd` (inserts the production baseline) before starting the Express server. All business logic, authentication (JWT + bcrypt), CAI validation, invoice generation, and payment plan management live in this service. The API is reachable at port `3000`.
 
 ### `credith_website` — React SPA (Vite)
 

@@ -1,7 +1,7 @@
 ---
-title: "Categories API — Organize Products by Category"
+title: "Categories API — Organize and Manage Product Categories"
 sidebarTitle: "Categories"
-description: "Create and manage product categories in Credith. Categories can be activated or deactivated and are linked to products through a many-to-many join table."
+description: "Create and manage product categories in Credith. Categories support activate/deactivate toggling and link to products via a many-to-many join table."
 ---
 
 The Categories API lets you group products into logical collections that aid navigation and reporting throughout Credith. Each category has a human-readable name and a description, and carries an `isActive` flag that can be toggled without deleting the record. Categories are linked to products through the `products_categories` join table — a single product can belong to multiple categories, and a category can contain many products. Category names are **stored in lowercase** and must be unique; attempting to create or rename a category to a name that already exists returns a `400` error.
